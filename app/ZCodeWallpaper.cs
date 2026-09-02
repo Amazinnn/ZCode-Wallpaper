@@ -391,6 +391,10 @@ internal sealed class Config
     public double Opacity = 0.55, Brightness = 1.0, Saturation = 1.0, Contrast = 1.0, Overlay = 0.3, Blur = 0;
     public double PanelOpacity = 0.55, PanelBlur = 10;
     public string Theme = "default"; // default | nocturne | glassy
+    public string MusicPath = "";
+    public double MusicVolume = 0.6;
+    public bool MusicAutoplay = true; // 跟随 ZCode 窗口可见性
+    public bool VideoSound = false;
 
     public static string PathOf { get { return Path.Combine(Program.DataDir, "config.json"); } }
     public static Config Load()
@@ -418,6 +422,10 @@ internal sealed class Config
                     c.PanelOpacity = MiniJson.Num(p.ContainsKey("panelOpacity") ? p["panelOpacity"] : null, c.PanelOpacity);
                     c.PanelBlur = MiniJson.Num(p.ContainsKey("panelBlur") ? p["panelBlur"] : null, c.PanelBlur);
                     if (d.ContainsKey("theme")) c.Theme = MiniJson.Str(d["theme"]) ?? "default";
+                    if (d.ContainsKey("music")) c.MusicPath = MiniJson.Str(d["music"]) ?? "";
+                    if (d.ContainsKey("musicVolume")) c.MusicVolume = MiniJson.Num(d["musicVolume"], c.MusicVolume);
+                    if (d.ContainsKey("musicAutoplay")) c.MusicAutoplay = MiniJson.Num(d["musicAutoplay"], 0) > 0 || (d["musicAutoplay"] is bool && (bool)d["musicAutoplay"]);
+                    if (d.ContainsKey("videoSound")) c.VideoSound = MiniJson.Num(d["videoSound"], 0) > 0 || (d["videoSound"] is bool && (bool)d["videoSound"]);
                 }
             }
             return c;
@@ -439,7 +447,11 @@ internal sealed class Config
         sb.Append(",\"blur\":").Append(Blur.ToString(System.Globalization.CultureInfo.InvariantCulture));
         sb.Append(",\"panelOpacity\":").Append(PanelOpacity.ToString(System.Globalization.CultureInfo.InvariantCulture));
         sb.Append(",\"panelBlur\":").Append(PanelBlur.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        sb.Append("},\"theme\":\"").Append(MiniJson.Escape(Theme)).Append("\",\"updatedAt\":\"").Append(DateTime.UtcNow.ToString("o")).Append("\"}");
+        sb.Append("},\"theme\":\"").Append(MiniJson.Escape(Theme)).Append("\",\"music\":\"").Append(MiniJson.Escape(MusicPath));
+        sb.Append("\",\"musicVolume\":").Append(MusicVolume.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        sb.Append(",\"musicAutoplay\":").Append(MusicAutoplay ? "true" : "false");
+        sb.Append(",\"videoSound\":").Append(VideoSound ? "true" : "false");
+        sb.Append(",\"updatedAt\":\"").Append(DateTime.UtcNow.ToString("o")).Append("\"}");
         File.WriteAllText(Config.PathOf, sb.ToString());
     }
 }
@@ -451,10 +463,12 @@ internal static class Util
     {
         { ".png", "image/png" }, { ".jpg", "image/jpeg" }, { ".jpeg", "image/jpeg" },
         { ".webp", "image/webp" }, { ".gif", "image/gif" }, { ".mp4", "video/mp4" },
-        { ".webm", "video/webm" }, { ".mov", "video/quicktime" }
+        { ".webm", "video/webm" }, { ".mov", "video/quicktime" }, { ".mp3", "audio/mpeg" },
+        { ".wav", "audio/wav" }, { ".ogg", "audio/ogg" }, { ".m4a", "audio/mp4" }, { ".flac", "audio/flac" }
     };
     public static string MimeFor(string ext) { string m; return Mime.TryGetValue(ext.ToLowerInvariant(), out m) ? m : null; }
     public static bool IsVideo(string ext) { ext = ext.ToLowerInvariant(); return ext == ".mp4" || ext == ".webm" || ext == ".mov"; }
+    public static bool IsAudio(string ext) { ext = ext.ToLowerInvariant(); return ext == ".mp3" || ext == ".wav" || ext == ".ogg" || ext == ".m4a" || ext == ".flac"; }
     public static long MaxBytes { get { return 200 * 1024 * 1024; } }
 
     /// <summary>路径清洗: 去空白/成对引号(单双全半角)、/d/xx 与 d:/xx 统一为 d:\xx</summary>
@@ -527,13 +541,16 @@ async (cfg) => {
     for (const id of ['zcode-wallpaper-layer', 'zcode-wallpaper-overlay']) {
       const el = document.getElementById(id); if (el) el.remove();
     }
+    for (const id of ['zcode-wallpaper-audio']) {
+      const el = document.getElementById(id); if (el) { try { el.pause(); } catch (e) {} el.remove(); }
+    }
     if (W.onVis) { document.removeEventListener('visibilitychange', W.onVis); W.onVis = null; }
     if (W.sheet) {
       const i = document.adoptedStyleSheets.indexOf(W.sheet);
       if (i >= 0) { const c = [...document.adoptedStyleSheets]; c.splice(i, 1); document.adoptedStyleSheets = c; }
       W.sheet = null;
     }
-    W.on = false; W.applyParams = null;
+    W.on = false; W.applyParams = null; W.setMusic = null; W.video = null; W.audio = null;
   };
   teardown();
   if (!cfg.on) return 'CLEARED';
@@ -550,22 +567,39 @@ async (cfg) => {
   overlay.setAttribute('style', 'position:fixed;inset:0;z-index:-1;pointer-events:none;background:#000;');
   document.documentElement.appendChild(overlay);
   const base = 'position:fixed;inset:0;z-index:-1;pointer-events:none;';
+  W.musicAutoplay = cfg.musicAutoplay !== undefined ? cfg.musicAutoplay : true;
   if (cfg.video) {
     const v = document.createElement('video');
     v.id = 'zcode-wallpaper-video';
-    v.src = cfg.img; v.autoplay = true; v.loop = true; v.muted = true; v.playsInline = true;
+    v.src = cfg.img; v.autoplay = true; v.loop = true; v.muted = !cfg.videoSound; v.playsInline = true;
     v.setAttribute('style', 'width:100%;height:100%;object-fit:cover;display:block;');
     layer.setAttribute('style', base);
     layer.appendChild(v);
-    W.onVis = () => {
-      if (document.hidden) { try { v.pause(); } catch (e) {} }
-      else { const p = v.play(); if (p && p.catch) p.catch(() => {}); }
-    };
-    document.addEventListener('visibilitychange', W.onVis);
+    W.video = v;
     const pp = v.play(); if (pp && pp.catch) pp.catch(() => {});
   } else {
     layer.setAttribute('style', base + 'background-image:url(' + JSON.stringify(cfg.img) + ');background-position:center;background-size:cover;background-repeat:no-repeat;');
   }
+  // 独立音乐层（与壁纸无关; audio loop 常驻, 可见性由 onVis 控制）
+  if (cfg.music) {
+    const a = document.createElement('audio');
+    a.id = 'zcode-wallpaper-audio';
+    a.src = cfg.music; a.loop = true; a.volume = cfg.musicVolume !== undefined ? cfg.musicVolume : 0.6;
+    document.documentElement.appendChild(a);
+    W.audio = a;
+    if (W.musicAutoplay) {
+      const tryPlay = () => { const mp = a.play(); if (mp && mp.catch) mp.catch(() => {}); };
+      if (document.visibilityState === 'visible') tryPlay();
+      else setTimeout(tryPlay, 600);
+      setTimeout(() => { if (a.paused && W.musicAutoplay && document.visibilityState === 'visible') tryPlay(); }, 900);
+    }
+  }
+  W.onVis = () => {
+    const vis = document.visibilityState === 'visible';
+    if (W.video) { if (!vis) { try { W.video.pause(); } catch (e) {} } else { const p = W.video.play(); if (p && p.catch) p.catch(() => {}); } }
+    if (W.audio && W.musicAutoplay) { if (!vis) { try { W.audio.pause(); } catch (e) {} } else { const p = W.audio.play(); if (p && p.catch) p.catch(() => {}); } }
+  };
+  document.addEventListener('visibilitychange', W.onVis);
   W.applyParams = (p) => {
     const l = document.getElementById('zcode-wallpaper-layer');
     const o = document.getElementById('zcode-wallpaper-overlay');
@@ -574,6 +608,22 @@ async (cfg) => {
     document.documentElement.style.setProperty('--zcwp-panel-opacity', p.panelOpacity);
     document.documentElement.style.setProperty('--zcwp-panel-blur', p.panelBlur + 'px');
     if (p.theme) document.documentElement.setAttribute('data-zcwp-theme', p.theme);
+    if (W.video) { W.video.muted = !(p.videoSound === true); W.video.volume = p.musicVolume !== undefined ? p.musicVolume : 0.6; }
+    if (W.audio && p.musicVolume !== undefined) W.audio.volume = p.musicVolume;
+  };
+  W.setMusic = (m) => {
+    if (m.src) {
+      let a = W.audio;
+      if (!a) { a = document.createElement('audio'); a.id = 'zcode-wallpaper-audio'; a.loop = true; document.documentElement.appendChild(a); W.audio = a; }
+      if (a.src !== m.src) a.src = m.src;
+      if (m.volume !== undefined) a.volume = m.volume;
+      W.musicAutoplay = m.autoplay !== undefined ? m.autoplay : W.musicAutoplay;
+      if (m.playing) { const p = a.play(); if (p && p.catch) p.catch(() => {}); }
+      else a.pause();
+      return 'OK';
+    }
+    if (W.audio) { try { W.audio.pause(); } catch (e) {} W.audio.remove(); W.audio = null; }
+    return 'OK';
   };
   W.applyParams(cfg);
   W.ver = 3; W.on = true;
@@ -582,9 +632,16 @@ async (cfg) => {
 
     private static string CfgJson(Config c, string url, bool video, string css)
     {
+        string musicUrl = "";
+        if (c.MusicPath != null && c.MusicPath.Length > 0)
+        {
+            try { musicUrl = Util.FileUrl(Path.Combine(Program.DataDir, "music" + Path.GetExtension(c.MusicPath))); } catch { }
+        }
         return string.Format(System.Globalization.CultureInfo.InvariantCulture,
-            "{{\"on\":true,\"img\":\"{0}\",\"video\":{1},\"opacity\":{2},\"brightness\":{3},\"saturation\":{4},\"contrast\":{5},\"overlay\":{6},\"blur\":{7},\"panelOpacity\":{8},\"panelBlur\":{9},\"theme\":\"{10}\",\"css\":\"{11}\"}}",
-            MiniJson.Escape(url), video ? "true" : "false", c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur, c.PanelOpacity, c.PanelBlur, MiniJson.Escape(c.Theme), MiniJson.Escape(css));
+            "{{\"on\":true,\"img\":\"{0}\",\"video\":{1},\"opacity\":{2},\"brightness\":{3},\"saturation\":{4},\"contrast\":{5},\"overlay\":{6},\"blur\":{7},\"panelOpacity\":{8},\"panelBlur\":{9},\"theme\":\"{10}\",\"music\":{11},\"musicVolume\":{12},\"musicAutoplay\":{13},\"videoSound\":{14},\"css\":\"{15}\"}}",
+            MiniJson.Escape(url), video ? "true" : "false", c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur, c.PanelOpacity, c.PanelBlur, MiniJson.Escape(c.Theme),
+            (musicUrl.Length > 0 ? "\"" + MiniJson.Escape(musicUrl) + "\"" : "null"),
+            c.MusicVolume, c.MusicAutoplay ? "true" : "false", c.VideoSound ? "true" : "false", MiniJson.Escape(css));
     }
 
     public static async Task<string> InjectAsync(Config c, string targetWsUrl, string url, bool video)
@@ -609,8 +666,32 @@ async (cfg) => {
     public static async Task<string> LiveUpdateAsync(string targetWsUrl, Config c)
     {
         string expr = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-            "(() => {{ const W = window.__ZCWP; if (!W || !W.on || !W.applyParams) return 'NO'; W.applyParams({{opacity:{0},brightness:{1},saturation:{2},contrast:{3},overlay:{4},blur:{5},panelOpacity:{6},panelBlur:{7},theme:\"{8}\"}}); return 'OK'; }})()",
-            c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur, c.PanelOpacity, c.PanelBlur, MiniJson.Escape(c.Theme));
+            "(() => {{ const W = window.__ZCWP; if (!W || !W.on || !W.applyParams) return 'NO'; W.applyParams({{opacity:{0},brightness:{1},saturation:{2},contrast:{3},overlay:{4},blur:{5},panelOpacity:{6},panelBlur:{7},theme:\"{8}\",musicVolume:{9},videoSound:{10}}}); return 'OK'; }})()",
+            c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur, c.PanelOpacity, c.PanelBlur, MiniJson.Escape(c.Theme), c.MusicVolume, c.VideoSound ? "true" : "false");
+        using (var cdp = await Cdp.ConnectAsync(targetWsUrl).ConfigureAwait(false))
+        {
+            return await cdp.EvaluateAsync(expr).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>音乐命令: 内联 DOM 操作（不依赖注入层版本）; src 为空=清除; 同步 W.audio 供 onVis 跟随</summary>
+    public static async Task<string> SetMusicAsync(string targetWsUrl, string src, bool playing, double volume, bool autoplay)
+    {
+        string expr = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+            "(() => {{ const W = window.__ZCWP || {{}}; let a = document.getElementById('zcode-wallpaper-audio');"
+            + " const src = {0}; const vol = {1};"
+            + " if (src) {{"
+            + "   if (!a) {{ a = document.createElement('audio'); a.id = 'zcode-wallpaper-audio'; a.loop = true; document.documentElement.appendChild(a); }}"
+            + "   if (a.src !== src) a.src = src;"
+            + "   a.volume = vol;"
+            + "   W.audio = a; W.musicAutoplay = {2};"
+            + "   if ({3}) {{ const p = a.play(); if (p && p.catch) p.catch(() => {{}}); }} else a.pause();"
+            + "   return 'OK';"
+            + " }}"
+            + " if (a) {{ try {{ a.pause(); }} catch (e) {{}} a.remove(); W.audio = null; }}"
+            + " return 'OK';"
+            + " }})()",
+            (src != null && src.Length > 0 ? "\"" + MiniJson.Escape(src) + "\"" : "null"), volume, autoplay ? "true" : "false", playing ? "true" : "false");
         using (var cdp = await Cdp.ConnectAsync(targetWsUrl).ConfigureAwait(false))
         {
             return await cdp.EvaluateAsync(expr).ConfigureAwait(false);
@@ -856,6 +937,12 @@ internal sealed class MainForm : Form
     private TrackBar _opacity, _brightness, _saturation, _contrast, _overlay, _blur, _panelOpacity, _panelBlur;
     private Label _opacityV, _brightnessV, _saturationV, _contrastV, _overlayV, _blurV, _panelOpacityV, _panelBlurV;
     private ComboBox _themeCombo;
+    private TextBox _musicPathBox;
+    private Button _musicPlayBtn, _musicClearBtn;
+    private TrackBar _musicVolumeBar;
+    private Label _musicVolumeV;
+    private CheckBox _musicFollowChk;
+    private bool _musicPlaying;
     private System.Windows.Forms.Timer _throttle;
     private Config _cfg;
     private bool _exitRequested;
@@ -929,7 +1016,7 @@ internal sealed class MainForm : Form
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(480, 640);
+        ClientSize = new Size(480, 660);
         Font = new Font("Microsoft YaHei UI", 9F);
 
         _status = new Label { Location = new Point(12, 10), Size = new Size(456, 22), Text = "状态: 检测中…" };
@@ -984,6 +1071,116 @@ internal sealed class MainForm : Form
         _panelOpacity = MakeSlider(ref y, "面板玻璃", 0, 100, ref _panelOpacityV);
         _panelBlur = MakeSlider(ref y, "毛玻璃 px", 0, 30, ref _panelBlurV);
         SetSlidersFromConfig();
+        BuildMusicUi();
+    }
+
+    private void BuildMusicUi()
+    {
+        Controls.Add(new Label { Location = new Point(12, 556), Size = new Size(60, 20), Text = "音乐文件:" });
+        _musicPathBox = new TextBox { Location = new Point(76, 553), Size = new Size(290, 23), ReadOnly = true };
+        _musicPathBox.Leave += delegate { _musicPathBox.Text = Util.NormalizePath(_musicPathBox.Text); };
+        Controls.Add(_musicPathBox);
+        var musicBrowse = new Button { Location = new Point(374, 552), Size = new Size(94, 25), Text = "浏览…" };
+        musicBrowse.Click += delegate
+        {
+            using (var dlg = new OpenFileDialog())
+            {
+                dlg.Filter = "音频|*.mp3;*.wav;*.ogg;*.m4a;*.flac|所有文件|*.*";
+                if (dlg.ShowDialog(this) == DialogResult.OK) SetMusicFile(dlg.FileName);
+            }
+        };
+        Controls.Add(musicBrowse);
+
+        _musicPlayBtn = new Button { Location = new Point(12, 588), Size = new Size(110, 28), Text = "▶ 播放" };
+        _musicPlayBtn.Click += delegate { ToggleMusic(); };
+        Controls.Add(_musicPlayBtn);
+        _musicClearBtn = new Button { Location = new Point(130, 588), Size = new Size(90, 28), Text = "清除" };
+        _musicClearBtn.Click += delegate { ClearMusic(); };
+        Controls.Add(_musicClearBtn);
+        Controls.Add(new Label { Location = new Point(228, 594), Size = new Size(40, 20), Text = "音量" });
+        _musicVolumeBar = new TrackBar { Location = new Point(268, 588), Size = new Size(120, 32), Minimum = 0, Maximum = 100, TickFrequency = 20 };
+        _musicVolumeV = new Label { Location = new Point(396, 594), Size = new Size(50, 20), Text = "" };
+        _musicVolumeBar.ValueChanged += delegate
+        {
+            if (_loadingSliders) return;
+            _musicVolumeV.Text = _musicVolumeBar.Value.ToString();
+            _cfg.MusicVolume = _musicVolumeBar.Value / 100.0;
+            _cfg.Save();
+            _throttle.Stop();
+            _throttle.Start();
+        };
+        Controls.Add(_musicVolumeBar);
+        Controls.Add(_musicVolumeV);
+        _musicFollowChk = new CheckBox { Location = new Point(12, 622), Size = new Size(260, 22), Text = "跟随窗口（最小化自动暂停）" };
+        _musicFollowChk.CheckedChanged += delegate
+        {
+            if (_loadingSliders) return;
+            _cfg.MusicAutoplay = _musicFollowChk.Checked;
+            _cfg.Save();
+            LiveMusicAsync(false);
+        };
+        Controls.Add(_musicFollowChk);
+    }
+
+    private string MusicCachePath()
+    {
+        if (string.IsNullOrEmpty(_cfg.MusicPath)) return "";
+        return Path.Combine(Program.DataDir, "music" + Path.GetExtension(_cfg.MusicPath));
+    }
+
+    /// <summary>设置音乐文件: 缓存副本 + 保存 + 开播</summary>
+    private async void SetMusicFile(string rawPath)
+    {
+        string path = Util.NormalizePath(rawPath);
+        if (!File.Exists(path)) { SetStatus("[X] 音乐文件不存在: " + path); return; }
+        try
+        {
+            string cached = Path.Combine(Program.DataDir, "music" + Path.GetExtension(path));
+            File.Copy(path, cached, true);
+            _cfg.MusicPath = path;
+            _cfg.MusicVolume = _musicVolumeBar.Value / 100.0;
+            _cfg.Save();
+            _musicPathBox.Text = path;
+            _musicPlaying = true;
+            _musicPlayBtn.Text = "⏸ 暂停";
+            SetStatus("音乐已设置，播放中…");
+            await LiveMusicAsync(true);
+        }
+        catch (Exception ex) { SetStatus("[X] " + ex.Message); }
+    }
+
+    private async void ToggleMusic()
+    {
+        if (string.IsNullOrEmpty(_cfg.MusicPath)) { SetStatus("[X] 请先选择音乐文件"); return; }
+        _musicPlaying = !_musicPlaying;
+        _musicPlayBtn.Text = _musicPlaying ? "⏸ 暂停" : "▶ 播放";
+        await LiveMusicAsync(_musicPlaying);
+    }
+
+    private void ClearMusic()
+    {
+        _cfg.MusicPath = "";
+        _cfg.Save();
+        _musicPathBox.Text = "";
+        _musicPlaying = false;
+        _musicPlayBtn.Text = "▶ 播放";
+        LiveMusicAsync(false, true);
+        SetStatus("音乐已清除");
+    }
+
+    /// <summary>liveOnly=false 时用配置音量; clear=true 传 src=null 清掉页面音频元素</summary>
+    private async Task LiveMusicAsync(bool playing, bool clear = false)
+    {
+        try
+        {
+            if (!Injector.EndpointUp()) { SetStatus("ZCode 未连接"); return; }
+            string src = clear ? null : (File.Exists(MusicCachePath()) ? Util.FileUrl(MusicCachePath()) : null);
+            foreach (var t in Injector.GetTargets())
+            {
+                try { await Injector.SetMusicAsync(t.WsUrl, src, playing, _cfg.MusicVolume, _cfg.MusicAutoplay); } catch { }
+            }
+        }
+        catch (Exception ex) { SetStatus("音乐控制失败: " + ex.Message); }
     }
 
     private TrackBar MakeSlider(ref int y, string name, int min, int max, ref Label valueLabel)
@@ -1048,6 +1245,12 @@ internal sealed class MainForm : Form
         _panelOpacityV.Text = _panelOpacity.Value.ToString();
         _panelBlurV.Text = _panelBlur.Value.ToString();
         _themeCombo.SelectedIndex = _cfg.Theme == "nocturne" ? 1 : (_cfg.Theme == "glassy" ? 2 : 0);
+        _musicVolumeBar.Value = Clamp((int)Math.Round(_cfg.MusicVolume * 100), 0, 100);
+        _musicVolumeV.Text = _musicVolumeBar.Value.ToString();
+        _musicFollowChk.Checked = _cfg.MusicAutoplay;
+        _musicPathBox.Text = _cfg.MusicPath;
+        _musicPlaying = false;
+        _musicPlayBtn.Text = "▶ 播放";
         _loadingSliders = false;
     }
 
@@ -1372,6 +1575,44 @@ internal static class Cli
                 Out("[OK] 已恢复官方原状。ZCode 下次启动不会再注入壁纸。");
                 return;
             }
+            if (verb == "music")
+            {
+                if (args.Length < 2) { Out("用法: ZCodeWallpaper.exe music <音频路径> [--volume 60]"); return; }
+                string mp = Util.NormalizePath(args[1]);
+                if (!File.Exists(mp)) { Out("[X] 音乐文件不存在: " + mp); Environment.ExitCode = 1; return; }
+                string ext = Path.GetExtension(mp).ToLowerInvariant();
+                if (!Util.IsAudio(ext)) { Out("[X] 不支持的音频格式 " + ext + "（mp3/wav/ogg/m4a/flac）"); Environment.ExitCode = 1; return; }
+                var opts2 = ParseOpts(args, 2);
+                string cached = Path.Combine(Program.DataDir, "music" + ext);
+                File.Copy(mp, cached, true);
+                var cfg2 = Config.Load() ?? new Config();
+                cfg2.MusicPath = mp;
+                double v;
+                if (opts2.TryGetValue("volume", out v)) cfg2.MusicVolume = v / 100.0;
+                cfg2.Save();
+                // 全量重注入: 刷新注入层(含音频 onVis 跟随)并随配置创建 audio 播放
+                string url2; bool video2;
+                if (Watch.ResolveMediaUrl(cfg2, out url2, out video2))
+                {
+                    foreach (var t in Injector.GetTargets())
+                    {
+                        try { await Injector.InjectAsync(cfg2, t.WsUrl, url2, video2).ConfigureAwait(false); } catch { }
+                    }
+                }
+                Out("[OK] 音乐已设置并播放 (" + (int)(cfg2.MusicVolume * 100) + "% 音量): " + mp);
+                return;
+            }
+            if (verb == "music-off")
+            {
+                var cfgX = Config.Load();
+                if (cfgX != null) { cfgX.MusicPath = ""; cfgX.Save(); }
+                foreach (var t in Injector.GetTargets())
+                {
+                    try { await Injector.SetMusicAsync(t.WsUrl, null, false, 0, true).ConfigureAwait(false); } catch { }
+                }
+                Out("[OK] 音乐已清除");
+                return;
+            }
             if (verb == "status") { await Status().ConfigureAwait(false); return; }
             if (verb == "clear")
             {
@@ -1405,7 +1646,9 @@ internal static class Cli
                 var opts = ParseOpts(args, 2);
                 string themeArg = null;
                 for (int i = 2; i + 1 < args.Length; i++) { if (args[i] == "--theme") { themeArg = args[i + 1]; break; } }
-                string err = await Apply(rawPath, opts, themeArg).ConfigureAwait(false);
+                string videoSoundArg = null;
+                for (int i = 2; i + 1 < args.Length; i++) { if (args[i] == "--video-sound") { videoSoundArg = args[i + 1]; break; } }
+                string err = await Apply(rawPath, opts, themeArg, videoSoundArg).ConfigureAwait(false);
                 if (err != null) { Out("[X] " + err); Environment.ExitCode = 1; }
                 return;
             }
@@ -1434,7 +1677,7 @@ internal static class Cli
     }
 
     /// <summary>核心入口：选文件→缓存→探测可用 URL→注入→存配置。GUI 与 CLI 共用。返回错误消息，null=成功。</summary>
-    public static async Task<string> Apply(string rawPath, Dictionary<string, double> opts, string themeArg = null, Action<int> progress = null)
+    public static async Task<string> Apply(string rawPath, Dictionary<string, double> opts, string themeArg = null, string videoSoundArg = null, Action<int> progress = null)
     {
         string path = Util.NormalizePath(rawPath);
         if (!File.Exists(path)) return "文件不存在: " + path;
@@ -1476,6 +1719,12 @@ internal static class Cli
             {
                 string t = themeArg.Trim().ToLowerInvariant();
                 if (t == "nocturne" || t == "glassy" || t == "default") cfg.Theme = t;
+            }
+            if (!string.IsNullOrEmpty(videoSoundArg))
+            {
+                string s = videoSoundArg.Trim().ToLowerInvariant();
+                if (s == "on" || s == "true" || s == "1") cfg.VideoSound = true;
+                else if (s == "off" || s == "false" || s == "0") cfg.VideoSound = false;
             }
         }
 
