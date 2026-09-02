@@ -14,6 +14,14 @@ work window in real time, without touching a single ZCode file. Survives app upd
 - **Layered glass UI.** The wallpaper is the star; the sidebar and composer float above it as
   translucent frosted-glass panels (blur + subtle separator), with their own opacity/blur sliders —
   nothing is one flat transparent window.
+- **Theme presets.** One-click themes from the Codex skin community playbook —
+  **Nocturne** (ink-black + smoked glass + amber glow, the community's favorite "premium" look)
+  and **Quiet Glass** (low-contrast translucent panels, softer larger radii).
+  Switch anytime from the panel's theme dropdown or `--theme nocturne|glassy|default`.
+
+![Nocturne theme](docs/theme-nocturne.png)
+![Quiet Glass theme](docs/theme-glassy.png)
+
 - **Media wallpapers.** PNG / JPG / WebP / animated GIF, and video (MP4 / WebM, muted & looping,
   auto-pauses when ZCode loses focus to save CPU).
 - **Survives everything.** Injection works through the Chrome DevTools Protocol (CDP) — ZCode's
@@ -44,7 +52,7 @@ The EXE is shipped at `app/ZCodeWallpaper.exe`. Double-click it to open the cont
 ### Command line
 
 ```
-ZCodeWallpaper.exe apply <path> [--opacity 55] [--brightness 100] [--saturation 100] [--contrast 100] [--overlay 30] [--blur 0] [--panel-opacity 55] [--panel-blur 10]
+ZCodeWallpaper.exe apply <path> [--opacity 55] [--brightness 100] [--saturation 100] [--contrast 100] [--overlay 30] [--blur 0] [--panel-opacity 55] [--panel-blur 10] [--theme nocturne|glassy|default]
 ZCodeWallpaper.exe clear            # remove wallpaper layer, keep config
 ZCodeWallpaper.exe status           # CDP / window / wallpaper status
 ZCodeWallpaper.exe shot <out.png>   # screenshot of the ZCode window
