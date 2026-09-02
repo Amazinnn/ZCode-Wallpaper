@@ -941,7 +941,7 @@ internal sealed class MainForm : Form
     private Button _musicPlayBtn, _musicClearBtn;
     private TrackBar _musicVolumeBar;
     private Label _musicVolumeV;
-    private CheckBox _musicFollowChk;
+    private CheckBox _musicFollowChk, _videoSoundChk;
     private bool _musicPlaying;
     private System.Windows.Forms.Timer _throttle;
     private Config _cfg;
@@ -1070,8 +1070,8 @@ internal sealed class MainForm : Form
         _blur = MakeSlider(ref y, "模糊 px", 0, 20, ref _blurV);
         _panelOpacity = MakeSlider(ref y, "面板玻璃", 0, 100, ref _panelOpacityV);
         _panelBlur = MakeSlider(ref y, "毛玻璃 px", 0, 30, ref _panelBlurV);
-        SetSlidersFromConfig();
         BuildMusicUi();
+        SetSlidersFromConfig();
     }
 
     private void BuildMusicUi()
@@ -1111,7 +1111,7 @@ internal sealed class MainForm : Form
         };
         Controls.Add(_musicVolumeBar);
         Controls.Add(_musicVolumeV);
-        _musicFollowChk = new CheckBox { Location = new Point(12, 622), Size = new Size(260, 22), Text = "跟随窗口（最小化自动暂停）" };
+        _musicFollowChk = new CheckBox { Location = new Point(12, 622), Size = new Size(200, 22), Text = "跟随窗口（最小化暂停）" };
         _musicFollowChk.CheckedChanged += delegate
         {
             if (_loadingSliders) return;
@@ -1120,6 +1120,17 @@ internal sealed class MainForm : Form
             LiveMusicAsync(false);
         };
         Controls.Add(_musicFollowChk);
+        _videoSoundChk = new CheckBox { Location = new Point(220, 622), Size = new Size(150, 22), Text = "视频自带声音" };
+        _videoSoundChk.CheckedChanged += delegate
+        {
+            if (_loadingSliders) return;
+            _cfg.VideoSound = _videoSoundChk.Checked;
+            _cfg.Save();
+            if (_cfg.VideoSound) { _musicPlaying = false; _musicPlayBtn.Text = "▶ 播放"; LiveMusicAsync(false); } // 互斥: 选视频声则暂停音乐
+            _throttle.Stop();
+            _throttle.Start();
+        };
+        Controls.Add(_videoSoundChk);
     }
 
     private string MusicCachePath()
@@ -1139,6 +1150,10 @@ internal sealed class MainForm : Form
             File.Copy(path, cached, true);
             _cfg.MusicPath = path;
             _cfg.MusicVolume = _musicVolumeBar.Value / 100.0;
+            _cfg.VideoSound = false; // 互斥: 用音乐则关视频声音
+            _loadingSliders = true;
+            _videoSoundChk.Checked = false;
+            _loadingSliders = false;
             _cfg.Save();
             _musicPathBox.Text = path;
             _musicPlaying = true;
@@ -1154,6 +1169,14 @@ internal sealed class MainForm : Form
         if (string.IsNullOrEmpty(_cfg.MusicPath)) { SetStatus("[X] 请先选择音乐文件"); return; }
         _musicPlaying = !_musicPlaying;
         _musicPlayBtn.Text = _musicPlaying ? "⏸ 暂停" : "▶ 播放";
+        if (_musicPlaying)
+        {
+            _cfg.VideoSound = false; // 互斥: 播放音乐则关视频声音
+            _loadingSliders = true;
+            _videoSoundChk.Checked = false;
+            _loadingSliders = false;
+            _cfg.Save();
+        }
         await LiveMusicAsync(_musicPlaying);
     }
 
@@ -1248,6 +1271,7 @@ internal sealed class MainForm : Form
         _musicVolumeBar.Value = Clamp((int)Math.Round(_cfg.MusicVolume * 100), 0, 100);
         _musicVolumeV.Text = _musicVolumeBar.Value.ToString();
         _musicFollowChk.Checked = _cfg.MusicAutoplay;
+        _videoSoundChk.Checked = _cfg.VideoSound;
         _musicPathBox.Text = _cfg.MusicPath;
         _musicPlaying = false;
         _musicPlayBtn.Text = "▶ 播放";
@@ -1587,6 +1611,7 @@ internal static class Cli
                 File.Copy(mp, cached, true);
                 var cfg2 = Config.Load() ?? new Config();
                 cfg2.MusicPath = mp;
+                cfg2.VideoSound = false; // 互斥: 用音乐则关视频声音
                 double v;
                 if (opts2.TryGetValue("volume", out v)) cfg2.MusicVolume = v / 100.0;
                 cfg2.Save();
