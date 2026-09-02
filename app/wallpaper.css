@@ -26,6 +26,9 @@
   /* 分层玻璃参数（由 applyParams 实时更新; 含兜底默认值） */
   --zcwp-panel-opacity: 0.55;
   --zcwp-panel-blur: 10px;
+  /* 主题可调: 玻璃体色 / 分隔线色 (rgb 三值) */
+  --zcwp-panel-rgb: 18, 18, 18;
+  --zcwp-sep-rgb: 255, 255, 255;
 }
 
 html {
@@ -47,14 +50,39 @@ body { background: transparent !important; }
 /* ---------- 分层玻璃（v1.1） ---------- */
 /* 左侧工作区侧边栏: 深色玻璃 + 右侧细分隔线 */
 [class*="workspace-sidebar-panel-width"] {
-  background: rgba(18, 18, 18, var(--zcwp-panel-opacity, 0.55)) !important;
+  background: rgba(var(--zcwp-panel-rgb, 18, 18, 18), var(--zcwp-panel-opacity, 0.55)) !important;
   backdrop-filter: blur(var(--zcwp-panel-blur, 10px)) !important;
   -webkit-backdrop-filter: blur(var(--zcwp-panel-blur, 10px)) !important;
-  border-right: 1px solid rgba(255, 255, 255, 0.06) !important;
+  border-right: 1px solid rgba(var(--zcwp-sep-rgb, 255, 255, 255), 0.07) !important;
 }
 /* 底部输入区卡片（bg-input 圆角卡）: 玻璃化 */
 [class~="bg-input"][class*="rounded-2xl"] {
-  background: rgba(18, 18, 18, var(--zcwp-panel-opacity, 0.55)) !important;
+  background: rgba(var(--zcwp-panel-rgb, 18, 18, 18), var(--zcwp-panel-opacity, 0.55)) !important;
   backdrop-filter: blur(var(--zcwp-panel-blur, 10px)) !important;
   -webkit-backdrop-filter: blur(var(--zcwp-panel-blur, 10px)) !important;
+}
+
+/* ---------- 主题预设 (v1.2) ---------- */
+/* 夜光琥珀 Nocturne: 墨黑 + 烟熏玻璃 + 琥珀光芒 (社区最受欢迎高级款) */
+html[data-zcwp-theme="nocturne"] {
+  --color-accent: #c7832f !important;
+  --color-border: rgba(232, 163, 61, 0.14) !important;
+  --color-border-hover: rgba(232, 163, 61, 0.26) !important;
+  --color-foreground: oklch(89% 0.013 78) !important;
+  --color-foreground-subtle: color-mix(in oklab, oklch(89% 0.013 78) 85%, #c7832f) !important;
+  --zcwp-panel-rgb: 24, 18, 8;
+  --zcwp-sep-rgb: 232, 163, 61;
+}
+/* 清透玻璃 Quet: 低对比通透玻璃 + 柔化大圆角 (轻盈明亮) */
+html[data-zcwp-theme="glassy"] {
+  --color-accent: #6e9ee5 !important;
+  --color-border: rgba(255, 255, 255, 0.10) !important;
+  --color-border-hover: rgba(255, 255, 255, 0.20) !important;
+  --color-foreground: oklch(93% 0.006 240) !important;
+  --color-foreground-subtle: color-mix(in oklab, oklch(93% 0.006 240) 92%, #9db8e8) !important;
+  --zcwp-panel-rgb: 30, 33, 40;
+  --radius-lg: 0.625rem !important;
+  --radius-xl: 0.875rem !important;
+  --radius-2xl: 1.25rem !important;
+  --radius-3xl: 1.75rem !important;
 }

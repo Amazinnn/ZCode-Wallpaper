@@ -390,6 +390,7 @@ internal sealed class Config
     public string CachedFile = "";  // data 目录里的缓存副本（含扩展名）
     public double Opacity = 0.55, Brightness = 1.0, Saturation = 1.0, Contrast = 1.0, Overlay = 0.3, Blur = 0;
     public double PanelOpacity = 0.55, PanelBlur = 10;
+    public string Theme = "default"; // default | nocturne | glassy
 
     public static string PathOf { get { return Path.Combine(Program.DataDir, "config.json"); } }
     public static Config Load()
@@ -416,6 +417,7 @@ internal sealed class Config
                     c.Blur = MiniJson.Num(p.ContainsKey("blur") ? p["blur"] : null, c.Blur);
                     c.PanelOpacity = MiniJson.Num(p.ContainsKey("panelOpacity") ? p["panelOpacity"] : null, c.PanelOpacity);
                     c.PanelBlur = MiniJson.Num(p.ContainsKey("panelBlur") ? p["panelBlur"] : null, c.PanelBlur);
+                    if (d.ContainsKey("theme")) c.Theme = MiniJson.Str(d["theme"]) ?? "default";
                 }
             }
             return c;
@@ -437,7 +439,7 @@ internal sealed class Config
         sb.Append(",\"blur\":").Append(Blur.ToString(System.Globalization.CultureInfo.InvariantCulture));
         sb.Append(",\"panelOpacity\":").Append(PanelOpacity.ToString(System.Globalization.CultureInfo.InvariantCulture));
         sb.Append(",\"panelBlur\":").Append(PanelBlur.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        sb.Append("},\"updatedAt\":\"").Append(DateTime.UtcNow.ToString("o")).Append("\"}");
+        sb.Append("},\"theme\":\"").Append(MiniJson.Escape(Theme)).Append("\",\"updatedAt\":\"").Append(DateTime.UtcNow.ToString("o")).Append("\"}");
         File.WriteAllText(Config.PathOf, sb.ToString());
     }
 }
@@ -571,6 +573,7 @@ async (cfg) => {
     if (o) o.style.opacity = p.overlay;
     document.documentElement.style.setProperty('--zcwp-panel-opacity', p.panelOpacity);
     document.documentElement.style.setProperty('--zcwp-panel-blur', p.panelBlur + 'px');
+    if (p.theme) document.documentElement.setAttribute('data-zcwp-theme', p.theme);
   };
   W.applyParams(cfg);
   W.ver = 3; W.on = true;
@@ -580,8 +583,8 @@ async (cfg) => {
     private static string CfgJson(Config c, string url, bool video, string css)
     {
         return string.Format(System.Globalization.CultureInfo.InvariantCulture,
-            "{{\"on\":true,\"img\":\"{0}\",\"video\":{1},\"opacity\":{2},\"brightness\":{3},\"saturation\":{4},\"contrast\":{5},\"overlay\":{6},\"blur\":{7},\"panelOpacity\":{8},\"panelBlur\":{9},\"css\":\"{10}\"}}",
-            MiniJson.Escape(url), video ? "true" : "false", c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur, c.PanelOpacity, c.PanelBlur, MiniJson.Escape(css));
+            "{{\"on\":true,\"img\":\"{0}\",\"video\":{1},\"opacity\":{2},\"brightness\":{3},\"saturation\":{4},\"contrast\":{5},\"overlay\":{6},\"blur\":{7},\"panelOpacity\":{8},\"panelBlur\":{9},\"theme\":\"{10}\",\"css\":\"{11}\"}}",
+            MiniJson.Escape(url), video ? "true" : "false", c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur, c.PanelOpacity, c.PanelBlur, MiniJson.Escape(c.Theme), MiniJson.Escape(css));
     }
 
     public static async Task<string> InjectAsync(Config c, string targetWsUrl, string url, bool video)
@@ -606,8 +609,8 @@ async (cfg) => {
     public static async Task<string> LiveUpdateAsync(string targetWsUrl, Config c)
     {
         string expr = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-            "(() => {{ const W = window.__ZCWP; if (!W || !W.on || !W.applyParams) return 'NO'; W.applyParams({{opacity:{0},brightness:{1},saturation:{2},contrast:{3},overlay:{4},blur:{5},panelOpacity:{6},panelBlur:{7}}}); return 'OK'; }})()",
-            c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur, c.PanelOpacity, c.PanelBlur);
+            "(() => {{ const W = window.__ZCWP; if (!W || !W.on || !W.applyParams) return 'NO'; W.applyParams({{opacity:{0},brightness:{1},saturation:{2},contrast:{3},overlay:{4},blur:{5},panelOpacity:{6},panelBlur:{7},theme:\"{8}\"}}); return 'OK'; }})()",
+            c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur, c.PanelOpacity, c.PanelBlur, MiniJson.Escape(c.Theme));
         using (var cdp = await Cdp.ConnectAsync(targetWsUrl).ConfigureAwait(false))
         {
             return await cdp.EvaluateAsync(expr).ConfigureAwait(false);
@@ -852,6 +855,7 @@ internal sealed class MainForm : Form
     private TextBox _pathBox;
     private TrackBar _opacity, _brightness, _saturation, _contrast, _overlay, _blur, _panelOpacity, _panelBlur;
     private Label _opacityV, _brightnessV, _saturationV, _contrastV, _overlayV, _blurV, _panelOpacityV, _panelBlurV;
+    private ComboBox _themeCombo;
     private System.Windows.Forms.Timer _throttle;
     private Config _cfg;
     private bool _exitRequested;
@@ -956,9 +960,21 @@ internal sealed class MainForm : Form
         shot.Click += delegate { ShotAsync(); };
         Controls.Add(shot);
 
-        Controls.Add(new Label { Location = new Point(12, 130), Size = new Size(456, 18), ForeColor = Color.DimGray, Text = "滑块拖动即时生效于 ZCode（无需确认），松手后自动保存" });
+        Controls.Add(new Label { Location = new Point(12, 128), Size = new Size(50, 20), Text = "主题:" });
+        _themeCombo = new ComboBox { Location = new Point(62, 125), Size = new Size(240, 24), DropDownStyle = ComboBoxStyle.DropDownList };
+        _themeCombo.Items.AddRange(new object[] { "默认（分层玻璃）", "夜光琥珀 Nocturne", "清透玻璃 Quiet" });
+        _themeCombo.SelectedIndexChanged += delegate
+        {
+            if (_loadingSliders) return;
+            _cfg.Theme = _themeCombo.SelectedIndex == 1 ? "nocturne" : (_themeCombo.SelectedIndex == 2 ? "glassy" : "default");
+            _cfg.Save();
+            LiveUpdateAsync();
+        };
+        Controls.Add(_themeCombo);
 
-        int y = 156;
+        Controls.Add(new Label { Location = new Point(12, 152), Size = new Size(456, 18), ForeColor = Color.DimGray, Text = "滑块拖动即时生效于 ZCode（无需确认），松手后自动保存" });
+
+        int y = 176;
         _opacity = MakeSlider(ref y, "不透明度", 0, 100, ref _opacityV);
         _brightness = MakeSlider(ref y, "亮度", 30, 180, ref _brightnessV);
         _saturation = MakeSlider(ref y, "饱和度", 0, 200, ref _saturationV);
@@ -1031,6 +1047,7 @@ internal sealed class MainForm : Form
         _blurV.Text = _blur.Value.ToString();
         _panelOpacityV.Text = _panelOpacity.Value.ToString();
         _panelBlurV.Text = _panelBlur.Value.ToString();
+        _themeCombo.SelectedIndex = _cfg.Theme == "nocturne" ? 1 : (_cfg.Theme == "glassy" ? 2 : 0);
         _loadingSliders = false;
     }
 
@@ -1386,7 +1403,9 @@ internal static class Cli
                 if (args.Length < 2) { Out("用法: ZCodeWallpaper.exe apply <图片或视频路径> [--opacity 55] [--brightness 100] [--saturation 100] [--contrast 100] [--overlay 30] [--blur 0]"); return; }
                 string rawPath = args[1];
                 var opts = ParseOpts(args, 2);
-                string err = await Apply(rawPath, opts).ConfigureAwait(false);
+                string themeArg = null;
+                for (int i = 2; i + 1 < args.Length; i++) { if (args[i] == "--theme") { themeArg = args[i + 1]; break; } }
+                string err = await Apply(rawPath, opts, themeArg).ConfigureAwait(false);
                 if (err != null) { Out("[X] " + err); Environment.ExitCode = 1; }
                 return;
             }
@@ -1415,7 +1434,7 @@ internal static class Cli
     }
 
     /// <summary>核心入口：选文件→缓存→探测可用 URL→注入→存配置。GUI 与 CLI 共用。返回错误消息，null=成功。</summary>
-    public static async Task<string> Apply(string rawPath, Dictionary<string, double> opts, Action<int> progress = null)
+    public static async Task<string> Apply(string rawPath, Dictionary<string, double> opts, string themeArg = null, Action<int> progress = null)
     {
         string path = Util.NormalizePath(rawPath);
         if (!File.Exists(path)) return "文件不存在: " + path;
@@ -1453,6 +1472,11 @@ internal static class Cli
             if (opts.TryGetValue("blur", out v)) cfg.Blur = v;
             if (opts.TryGetValue("panel-opacity", out v)) cfg.PanelOpacity = v / 100.0;
             if (opts.TryGetValue("panel-blur", out v)) cfg.PanelBlur = v;
+            if (!string.IsNullOrEmpty(themeArg))
+            {
+                string t = themeArg.Trim().ToLowerInvariant();
+                if (t == "nocturne" || t == "glassy" || t == "default") cfg.Theme = t;
+            }
         }
 
         // URL 模式降级链: 图片 data URL→file://→本地服务；视频 file://→本地服务
