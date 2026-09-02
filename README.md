@@ -1,91 +1,95 @@
-# ZCode Wallpaper
+<p align="center">
+  <b>ZCode Wallpaper</b><br>
+  <i>One 100&nbsp;KB single-file EXE that wears ZCode's desktop bed in live wallpapers — images, animated GIFs, even video — without touching a single ZCode file.</i>
+</p>
 
-**A single-file C# wallpaper/theme injector for the ZCode desktop app (Electron).**
-Inject live wallpapers — images, animated GIF/WebP, even full-screen video — into the ZCode
-work window in real time, without touching a single ZCode file. Survives app updates.
+<p align="center">
+  <img src="https://img.shields.io/badge/platform-Windows_10%2F11-0078d4?logo=windows" alt="Platform">
+  <img src="https://img.shields.io/badge/version-v1.2.0-e8a33d" alt="Version">
+  <img src="https://img.shields.io/badge/language-C%23_5-68217a?logo=.net" alt="Language">
+  <img src="https://img.shields.io/badge/dependencies-none-27ae60" alt="Dependencies">
+  <img src="https://img.shields.io/badge/license-MIT-4f8cc9" alt="License">
+</p>
 
-![ZCode with wallpaper](docs/zcode-with-wallpaper.png)
+<p align="center">
+  <img src="docs/screenshot-hero.jpg" width="820" alt="ZCode with wallpaper">
+</p>
 
-## What it does
+---
 
-- **One EXE, zero dependencies.** ~98 KB of compiled C# 5 (no node, no runtime installs, no scripts).
-- **Real-time tuning.** Brightness / saturation / contrast / opacity / overlay / blur sliders —
-  what you drag is what you see, instantly, inside ZCode.
-- **Layered glass UI.** The wallpaper is the star; the sidebar and composer float above it as
-  translucent frosted-glass panels (blur + subtle separator), with their own opacity/blur sliders —
-  nothing is one flat transparent window.
-- **Theme presets.** One-click themes from the Codex skin community playbook —
-  **Nocturne** (ink-black + smoked glass + amber glow, the community's favorite "premium" look)
-  and **Quiet Glass** (low-contrast translucent panels, softer larger radii).
-  Switch anytime from the panel's theme dropdown or `--theme nocturne|glassy|default`.
+## ✨ Features
 
-![Nocturne theme](docs/theme-nocturne.png)
-![Quiet Glass theme](docs/theme-glassy.png)
+- **🖼 Live wallpapers** — PNG / JPG / WebP, animated GIF, and full-screen video (MP4 / WebM, muted & looping; the video auto-pauses when ZCode loses focus to save CPU).
+- **🎛 8 real-time sliders** — opacity, brightness, saturation, contrast, overlay, blur, panel-glass opacity, panel-glass blur. Dragging a slider changes ZCode instantly — what you tweak is what you see, zero "Apply" round-trips.
+- **🥃 Layered glass UI** — the wallpaper is the star, and the workspace sidebar + composer float above it as translucent frosted-glass panels with subtle separators. No flat "everything transparent" look.
+- **🎨 Theme presets** — one-click moods built on the Codex skin community's playbook:
+  **Nocturne** (`ink-black + smoked glass + amber glow`) and **Quiet Glass** (low-contrast translucent panels, softer radii). Switch live from the panel.
+- **🛡 Update-proof** — injection happens through the Chrome DevTools Protocol. ZCode's `app.asar` is never modified, so app updates cannot break it.
+- **🌙 Silent daemon** — re-applies the wallpaper after ZCode restarts or opens new windows; registered for auto-start, zero windows, zero clicks.
+- **📦 One file, zero dependencies** — ~100 KB compiled C# 5 (runs on the .NET Framework that ships with Windows), no Node, no runtime, no scripts, no admin rights.
+- **🗑 Restore in two clicks** — tray menu → "Uninstall & restore" puts the stock ZCode back and cleans up every shortcut and autostart entry.
 
-- **Media wallpapers.** PNG / JPG / WebP / animated GIF, and video (MP4 / WebM, muted & looping,
-  auto-pauses when ZCode loses focus to save CPU).
-- **Survives everything.** Injection works through the Chrome DevTools Protocol (CDP) — ZCode's
-  `app.asar` is never modified, so app updates can't break it.
-- **Silent daemon.** Re-applies the wallpaper automatically after ZCode restarts or spawns new windows.
+## 📸 Gallery
 
-![Control panel](docs/wallpaper-panel.png)
+<p align="center">
+  <img src="docs/screenshot-panel.png" width="330" alt="Control panel">
+  <img src="docs/theme-nocturne.png" width="330" alt="Nocturne theme">
+  <img src="docs/theme-glassy.png" width="330" alt="Quiet Glass theme">
+</p>
 
-## Requirements
+*Left: the control panel. Middle: **Nocturne** — amber glow + smoked glass. Right: **Quiet Glass** — translucent, softer radii.*
 
-- Windows 10/11 (ships .NET Framework 4.8)
-- ZCode desktop app
+## 🚀 Getting started
 
-## Quick start
+1. **Grab the binary** — `app/ZCodeWallpaper.exe` (in the release zip), no installation needed.
+2. **One-time setup** (also re-run after ZCode updates):
 
-The EXE is shipped at `app/ZCodeWallpaper.exe`. Double-click it to open the control panel
-(if the daemon is already running, it will just bring the panel up). Everything is built in:
+```bash
+ZCodeWallpaper.exe setup
+```
 
-| Want to... | Do... |
-|---|---|
-| Set a wallpaper | Panel → browse or paste a path (quotes, spaces and `/d/...` Unix-style paths are cleaned automatically) → **Apply** |
-| Tune live | Drag the sliders — changes apply to ZCode instantly and auto-save |
-| Video / animation | Pick an MP4/WebM/GIF/WebP in the same dialog |
-| Keep it after restarts | Nothing — the silent daemon is registered for auto-start (`setup`) |
-| Re-configure after a ZCode update | `ZCodeWallpaper.exe setup` |
-| Restore the official look | Tray menu → **Uninstall & restore** (also `ZCodeWallpaper.exe uninstall`) |
+   This adds `--remote-debugging-port=9335` to your existing ZCode shortcuts (backups kept as `*.zcwp.bak`), creates the silent autostart entry, and puts a **「换壁纸」** desktop shortcut in place.
 
-### Command line
+3. **Start it** — double-click the desktop shortcut. Browse to an image (or paste a path — quotes, spaces and `/d/…` Unix-style paths are cleaned automatically), hit **Apply**, done. The daemon keeps it alive from then on with zero attention.
+
+## 💻 Command line
 
 ```
-ZCodeWallpaper.exe apply <path> [--opacity 55] [--brightness 100] [--saturation 100] [--contrast 100] [--overlay 30] [--blur 0] [--panel-opacity 55] [--panel-blur 10] [--theme nocturne|glassy|default]
-ZCodeWallpaper.exe clear            # remove wallpaper layer, keep config
+ZCodeWallpaper.exe apply <path> [--opacity 55] [--brightness 100] [--saturation 100]
+                                   [--contrast 100] [--overlay 30] [--blur 0]
+                                   [--panel-opacity 55] [--panel-blur 10] [--theme nocturne|glassy|default]
+ZCodeWallpaper.exe clear            # remove the wallpaper layer, keep config
 ZCodeWallpaper.exe status           # CDP / window / wallpaper status
 ZCodeWallpaper.exe shot <out.png>   # screenshot of the ZCode window
-ZCodeWallpaper.exe setup            # add debug-port flag to ZCode shortcuts, register daemon+desktop entry
-ZCodeWallpaper.exe uninstall        # full restore: clear wallpaper, restore shortcuts, remove autostart
+ZCodeWallpaper.exe setup            # shortcuts flag + autostart + desktop entry
+ZCodeWallpaper.exe uninstall        # full restore to stock ZCode
 ```
 
-CLI output is mirrored to `app/data/cli-out.log` (stdout may be lost in some hosts).
+CLI output is also mirrored to `app/data/cli-out.log` (stdout can get lost in some hosts).
 
-## How it works
+## 🔍 How it works — and how it finds ZCode
 
-1. ZCode is launched with `--remote-debugging-port=9335` (added to its shortcuts by `setup`).
-2. The tool connects to the window via CDP and injects JS: background CSS variables
-   (`--color-background-win-alt`, …) are made transparent via `document.adoptedStyleSheets`
-   (immune to CSP), and two fixed full-viewport layers are added — the wallpaper layer and a
-   black overlay — behind the UI (`z-index:-1`, `pointer-events:none`).
-3. A layered-glass scene is layered on top: the workspace sidebar and the composer card get
-   translucent dark backgrounds with `backdrop-filter` blur, driven by the
-   `--zcwp-panel-opacity` / `--zcwp-panel-blur` custom properties (updated live by the sliders).
-4. Images are inlined as data URLs; videos use `file://` (a local TCP server is the fallback).
-5. The daemon polls `/json` every 3 s and re-injects into any ZCode window that lost the
-   `window.__ZCWP.on` marker (restarts, new windows), verifying every 15 s.
+No application scanning, no installation detection. The discovery is just **one agreed local port**:
 
-`app/wallpaper.css` is the external style template. If a future ZCode update changes its
-background variable names, update that single file — no recompile needed.
+1. `setup` adds `--remote-debugging-port=9335` to ZCode's launch shortcuts, so every ZCode window starts with a Chrome DevTools Protocol endpoint on `127.0.0.1:9335`.
+2. The tool polls `http://127.0.0.1:9335/json` every 3 seconds and reads the window list directly from the protocol — that's how it "recognizes" ZCode (any Chromium page target on that port, nothing else).
+3. For each ZCode window it injects via `Runtime.evaluate`: background CSS variables (`--color-background-win-alt`, …) are set transparent through `document.adoptedStyleSheets` (immune to CSP), and two fixed full-viewport layers — wallpaper + black overlay — are placed behind the UI (`z-index:-1`, `pointer-events:none`).
+4. Layers of taste on top: the sidebar and composer become smoked-glass panels (`backdrop-filter` blur) driven by live `--zcwp-panel-*` properties; themes flip a `data-zcwp-theme` attribute that swaps accent/glass/radius variables.
+5. If a window loses its `window.__ZCWP.on` marker (restart, new window, reload), the daemon re-injects within seconds and re-verifies every 15 seconds.
 
-## Build from source
+The port is loopback-only, so nothing outside your machine can reach it.
 
-```
-csc -nologo -target:winexe -out:ZCodeWallpaper.exe ZCodeWallpaper.cs
+## 🎨 Customization
+
+`app/wallpaper.css` is the entire injected style template — themes, glass panels, and the transparency list all live there as plain CSS custom properties. If a future ZCode update introduces new background variables, add them to this one file — **no recompile needed**.
+
+## 🔨 Build
+
+```bash
+csc -nologo -target:winexe -out:ZCodeWallpaper.exe ZCodeWallpaper.cs \
     -r:System.dll -r:System.Core.dll -r:System.Drawing.dll -r:System.Windows.Forms.dll -r:Microsoft.CSharp.dll
 ```
 
-## License
+## 📄 License
 
-[MIT](LICENSE)
+[MIT](LICENSE) © 2026 Amazinnn
