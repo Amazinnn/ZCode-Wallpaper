@@ -674,8 +674,8 @@ async (cfg) => {
         }
     }
 
-    /// <summary>音乐命令: 内联 DOM 操作（不依赖注入层版本）; src 为空=清除; 同步 W.audio 供 onVis 跟随</summary>
-    public static async Task<string> SetMusicAsync(string targetWsUrl, string src, bool playing, double volume, bool autoplay)
+    /// <summary>音乐命令: 内联 DOM 操作（不依赖注入层版本）; src 为空=清除; playing: 1=播/0=暂停/-1=保持现状; 同步 W.audio 供 onVis 跟随</summary>
+    public static async Task<string> SetMusicAsync(string targetWsUrl, string src, int playing, double volume, bool autoplay)
     {
         string expr = string.Format(System.Globalization.CultureInfo.InvariantCulture,
             "(() => {{ const W = window.__ZCWP || {{}}; let a = document.getElementById('zcode-wallpaper-audio');"
@@ -685,13 +685,13 @@ async (cfg) => {
             + "   if (a.src !== src) a.src = src;"
             + "   a.volume = vol;"
             + "   W.audio = a; W.musicAutoplay = {2};"
-            + "   if ({3}) {{ const p = a.play(); if (p && p.catch) p.catch(() => {{}}); }} else a.pause();"
+            + "   if ({3} === 1) {{ const p = a.play(); if (p && p.catch) p.catch(() => {{}}); }} else if ({3} === 0) a.pause();"
             + "   return 'OK';"
             + " }}"
             + " if (a) {{ try {{ a.pause(); }} catch (e) {{}} a.remove(); W.audio = null; }}"
             + " return 'OK';"
             + " }})()",
-            (src != null && src.Length > 0 ? "\"" + MiniJson.Escape(src) + "\"" : "null"), volume, autoplay ? "true" : "false", playing ? "true" : "false");
+            (src != null && src.Length > 0 ? "\"" + MiniJson.Escape(src) + "\"" : "null"), volume, autoplay ? "true" : "false", playing);
         using (var cdp = await Cdp.ConnectAsync(targetWsUrl).ConfigureAwait(false))
         {
             return await cdp.EvaluateAsync(expr).ConfigureAwait(false);
@@ -1117,7 +1117,7 @@ internal sealed class MainForm : Form
             if (_loadingSliders) return;
             _cfg.MusicAutoplay = _musicFollowChk.Checked;
             _cfg.Save();
-            LiveMusicAsync(false);
+            LiveMusicAsync(-1); // 只同步 autoplay 语义, 不改变播放状态
         };
         Controls.Add(_musicFollowChk);
         _videoSoundChk = new CheckBox { Location = new Point(220, 622), Size = new Size(150, 22), Text = "视频自带声音" };
@@ -1126,7 +1126,7 @@ internal sealed class MainForm : Form
             if (_loadingSliders) return;
             _cfg.VideoSound = _videoSoundChk.Checked;
             _cfg.Save();
-            if (_cfg.VideoSound) { _musicPlaying = false; _musicPlayBtn.Text = "▶ 播放"; LiveMusicAsync(false); } // 互斥: 选视频声则暂停音乐
+            if (_cfg.VideoSound) { _musicPlaying = false; _musicPlayBtn.Text = "▶ 播放"; LiveMusicAsync(0); } // 互斥: 选视频声则暂停音乐
             _throttle.Stop();
             _throttle.Start();
         };
@@ -1159,7 +1159,7 @@ internal sealed class MainForm : Form
             _musicPlaying = true;
             _musicPlayBtn.Text = "⏸ 暂停";
             SetStatus("音乐已设置，播放中…");
-            await LiveMusicAsync(true);
+            await LiveMusicAsync(1);
         }
         catch (Exception ex) { SetStatus("[X] " + ex.Message); }
     }
@@ -1177,7 +1177,7 @@ internal sealed class MainForm : Form
             _loadingSliders = false;
             _cfg.Save();
         }
-        await LiveMusicAsync(_musicPlaying);
+        await LiveMusicAsync(_musicPlaying ? 1 : 0);
     }
 
     private void ClearMusic()
@@ -1187,12 +1187,12 @@ internal sealed class MainForm : Form
         _musicPathBox.Text = "";
         _musicPlaying = false;
         _musicPlayBtn.Text = "▶ 播放";
-        LiveMusicAsync(false, true);
+        LiveMusicAsync(0, true);
         SetStatus("音乐已清除");
     }
 
     /// <summary>liveOnly=false 时用配置音量; clear=true 传 src=null 清掉页面音频元素</summary>
-    private async Task LiveMusicAsync(bool playing, bool clear = false)
+    private async Task LiveMusicAsync(int playing, bool clear = false)
     {
         try
         {
@@ -1633,7 +1633,7 @@ internal static class Cli
                 if (cfgX != null) { cfgX.MusicPath = ""; cfgX.Save(); }
                 foreach (var t in Injector.GetTargets())
                 {
-                    try { await Injector.SetMusicAsync(t.WsUrl, null, false, 0, true).ConfigureAwait(false); } catch { }
+                    try { await Injector.SetMusicAsync(t.WsUrl, null, 0, 0, true).ConfigureAwait(false); } catch { }
                 }
                 Out("[OK] 音乐已清除");
                 return;
