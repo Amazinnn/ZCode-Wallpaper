@@ -389,6 +389,7 @@ internal sealed class Config
     public string SourcePath = "";  // 用户选择的原始文件
     public string CachedFile = "";  // data 目录里的缓存副本（含扩展名）
     public double Opacity = 0.55, Brightness = 1.0, Saturation = 1.0, Contrast = 1.0, Overlay = 0.3, Blur = 0;
+    public double PanelOpacity = 0.55, PanelBlur = 10;
 
     public static string PathOf { get { return Path.Combine(Program.DataDir, "config.json"); } }
     public static Config Load()
@@ -413,6 +414,8 @@ internal sealed class Config
                     c.Contrast = MiniJson.Num(p.ContainsKey("contrast") ? p["contrast"] : null, c.Contrast);
                     c.Overlay = MiniJson.Num(p.ContainsKey("overlay") ? p["overlay"] : null, c.Overlay);
                     c.Blur = MiniJson.Num(p.ContainsKey("blur") ? p["blur"] : null, c.Blur);
+                    c.PanelOpacity = MiniJson.Num(p.ContainsKey("panelOpacity") ? p["panelOpacity"] : null, c.PanelOpacity);
+                    c.PanelBlur = MiniJson.Num(p.ContainsKey("panelBlur") ? p["panelBlur"] : null, c.PanelBlur);
                 }
             }
             return c;
@@ -432,6 +435,8 @@ internal sealed class Config
         sb.Append(",\"contrast\":").Append(Contrast.ToString(System.Globalization.CultureInfo.InvariantCulture));
         sb.Append(",\"overlay\":").Append(Overlay.ToString(System.Globalization.CultureInfo.InvariantCulture));
         sb.Append(",\"blur\":").Append(Blur.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        sb.Append(",\"panelOpacity\":").Append(PanelOpacity.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        sb.Append(",\"panelBlur\":").Append(PanelBlur.ToString(System.Globalization.CultureInfo.InvariantCulture));
         sb.Append("},\"updatedAt\":\"").Append(DateTime.UtcNow.ToString("o")).Append("\"}");
         File.WriteAllText(Config.PathOf, sb.ToString());
     }
@@ -564,6 +569,8 @@ async (cfg) => {
     const o = document.getElementById('zcode-wallpaper-overlay');
     if (l) { l.style.opacity = p.opacity; l.style.filter = 'blur(' + p.blur + 'px) brightness(' + p.brightness + ') saturate(' + p.saturation + ') contrast(' + p.contrast + ')'; }
     if (o) o.style.opacity = p.overlay;
+    document.documentElement.style.setProperty('--zcwp-panel-opacity', p.panelOpacity);
+    document.documentElement.style.setProperty('--zcwp-panel-blur', p.panelBlur + 'px');
   };
   W.applyParams(cfg);
   W.ver = 3; W.on = true;
@@ -573,8 +580,8 @@ async (cfg) => {
     private static string CfgJson(Config c, string url, bool video, string css)
     {
         return string.Format(System.Globalization.CultureInfo.InvariantCulture,
-            "{{\"on\":true,\"img\":\"{0}\",\"video\":{1},\"opacity\":{2},\"brightness\":{3},\"saturation\":{4},\"contrast\":{5},\"overlay\":{6},\"blur\":{7},\"css\":\"{8}\"}}",
-            MiniJson.Escape(url), video ? "true" : "false", c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur, MiniJson.Escape(css));
+            "{{\"on\":true,\"img\":\"{0}\",\"video\":{1},\"opacity\":{2},\"brightness\":{3},\"saturation\":{4},\"contrast\":{5},\"overlay\":{6},\"blur\":{7},\"panelOpacity\":{8},\"panelBlur\":{9},\"css\":\"{10}\"}}",
+            MiniJson.Escape(url), video ? "true" : "false", c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur, c.PanelOpacity, c.PanelBlur, MiniJson.Escape(css));
     }
 
     public static async Task<string> InjectAsync(Config c, string targetWsUrl, string url, bool video)
@@ -595,12 +602,12 @@ async (cfg) => {
         }
     }
 
-    /// <summary>滑块实时更新：不重建图层，只改内联样式。返回 OK/NO。</summary>
+    /// <summary>滑块实时更新：不重建图层，只改内联样式与面板玻璃变量。返回 OK/NO。</summary>
     public static async Task<string> LiveUpdateAsync(string targetWsUrl, Config c)
     {
         string expr = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-            "(() => {{ const W = window.__ZCWP; if (!W || !W.on || !W.applyParams) return 'NO'; W.applyParams({{opacity:{0},brightness:{1},saturation:{2},contrast:{3},overlay:{4},blur:{5}}}); return 'OK'; }})()",
-            c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur);
+            "(() => {{ const W = window.__ZCWP; if (!W || !W.on || !W.applyParams) return 'NO'; W.applyParams({{opacity:{0},brightness:{1},saturation:{2},contrast:{3},overlay:{4},blur:{5},panelOpacity:{6},panelBlur:{7}}}); return 'OK'; }})()",
+            c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur, c.PanelOpacity, c.PanelBlur);
         using (var cdp = await Cdp.ConnectAsync(targetWsUrl).ConfigureAwait(false))
         {
             return await cdp.EvaluateAsync(expr).ConfigureAwait(false);
@@ -843,8 +850,8 @@ internal sealed class MainForm : Form
     private NotifyIcon _tray;
     private Label _status;
     private TextBox _pathBox;
-    private TrackBar _opacity, _brightness, _saturation, _contrast, _overlay, _blur;
-    private Label _opacityV, _brightnessV, _saturationV, _contrastV, _overlayV, _blurV;
+    private TrackBar _opacity, _brightness, _saturation, _contrast, _overlay, _blur, _panelOpacity, _panelBlur;
+    private Label _opacityV, _brightnessV, _saturationV, _contrastV, _overlayV, _blurV, _panelOpacityV, _panelBlurV;
     private System.Windows.Forms.Timer _throttle;
     private Config _cfg;
     private bool _exitRequested;
@@ -918,7 +925,7 @@ internal sealed class MainForm : Form
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(480, 470);
+        ClientSize = new Size(480, 640);
         Font = new Font("Microsoft YaHei UI", 9F);
 
         _status = new Label { Location = new Point(12, 10), Size = new Size(456, 22), Text = "状态: 检测中…" };
@@ -958,6 +965,8 @@ internal sealed class MainForm : Form
         _contrast = MakeSlider(ref y, "对比度", 50, 150, ref _contrastV);
         _overlay = MakeSlider(ref y, "遮罩压暗", 0, 80, ref _overlayV);
         _blur = MakeSlider(ref y, "模糊 px", 0, 20, ref _blurV);
+        _panelOpacity = MakeSlider(ref y, "面板玻璃", 0, 100, ref _panelOpacityV);
+        _panelBlur = MakeSlider(ref y, "毛玻璃 px", 0, 30, ref _panelBlurV);
         SetSlidersFromConfig();
     }
 
@@ -999,6 +1008,8 @@ internal sealed class MainForm : Form
         _cfg.Contrast = _contrast.Value / 100.0;
         _cfg.Overlay = _overlay.Value / 100.0;
         _cfg.Blur = _blur.Value;
+        _cfg.PanelOpacity = _panelOpacity.Value / 100.0;
+        _cfg.PanelBlur = _panelBlur.Value;
     }
 
     private void SetSlidersFromConfig()
@@ -1010,12 +1021,16 @@ internal sealed class MainForm : Form
         _contrast.Value = Clamp((int)Math.Round(_cfg.Contrast * 100), 50, 150);
         _overlay.Value = Clamp((int)Math.Round(_cfg.Overlay * 100), 0, 80);
         _blur.Value = Clamp((int)Math.Round(_cfg.Blur), 0, 20);
+        _panelOpacity.Value = Clamp((int)Math.Round(_cfg.PanelOpacity * 100), 0, 100);
+        _panelBlur.Value = Clamp((int)Math.Round(_cfg.PanelBlur), 0, 30);
         _opacityV.Text = _opacity.Value.ToString();
         _brightnessV.Text = _brightness.Value.ToString();
         _saturationV.Text = _saturation.Value.ToString();
         _contrastV.Text = _contrast.Value.ToString();
         _overlayV.Text = _overlay.Value.ToString();
         _blurV.Text = _blur.Value.ToString();
+        _panelOpacityV.Text = _panelOpacity.Value.ToString();
+        _panelBlurV.Text = _panelBlur.Value.ToString();
         _loadingSliders = false;
     }
 
@@ -1436,6 +1451,8 @@ internal static class Cli
             if (opts.TryGetValue("contrast", out v)) cfg.Contrast = v / 100.0;
             if (opts.TryGetValue("overlay", out v)) cfg.Overlay = v / 100.0;
             if (opts.TryGetValue("blur", out v)) cfg.Blur = v;
+            if (opts.TryGetValue("panel-opacity", out v)) cfg.PanelOpacity = v / 100.0;
+            if (opts.TryGetValue("panel-blur", out v)) cfg.PanelBlur = v;
         }
 
         // URL 模式降级链: 图片 data URL→file://→本地服务；视频 file://→本地服务

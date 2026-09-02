@@ -8,9 +8,12 @@ work window in real time, without touching a single ZCode file. Survives app upd
 
 ## What it does
 
-- **One EXE, zero dependencies.** ~96 KB of compiled C# 5 (no node, no runtime installs, no scripts).
+- **One EXE, zero dependencies.** ~98 KB of compiled C# 5 (no node, no runtime installs, no scripts).
 - **Real-time tuning.** Brightness / saturation / contrast / opacity / overlay / blur sliders —
   what you drag is what you see, instantly, inside ZCode.
+- **Layered glass UI.** The wallpaper is the star; the sidebar and composer float above it as
+  translucent frosted-glass panels (blur + subtle separator), with their own opacity/blur sliders —
+  nothing is one flat transparent window.
 - **Media wallpapers.** PNG / JPG / WebP / animated GIF, and video (MP4 / WebM, muted & looping,
   auto-pauses when ZCode loses focus to save CPU).
 - **Survives everything.** Injection works through the Chrome DevTools Protocol (CDP) — ZCode's
@@ -41,7 +44,7 @@ The EXE is shipped at `app/ZCodeWallpaper.exe`. Double-click it to open the cont
 ### Command line
 
 ```
-ZCodeWallpaper.exe apply <path> [--opacity 55] [--brightness 100] [--saturation 100] [--contrast 100] [--overlay 30] [--blur 0]
+ZCodeWallpaper.exe apply <path> [--opacity 55] [--brightness 100] [--saturation 100] [--contrast 100] [--overlay 30] [--blur 0] [--panel-opacity 55] [--panel-blur 10]
 ZCodeWallpaper.exe clear            # remove wallpaper layer, keep config
 ZCodeWallpaper.exe status           # CDP / window / wallpaper status
 ZCodeWallpaper.exe shot <out.png>   # screenshot of the ZCode window
@@ -58,8 +61,11 @@ CLI output is mirrored to `app/data/cli-out.log` (stdout may be lost in some hos
    (`--color-background-win-alt`, …) are made transparent via `document.adoptedStyleSheets`
    (immune to CSP), and two fixed full-viewport layers are added — the wallpaper layer and a
    black overlay — behind the UI (`z-index:-1`, `pointer-events:none`).
-3. Images are inlined as data URLs; videos use `file://` (a local TCP server is the fallback).
-4. The daemon polls `/json` every 3 s and re-injects into any ZCode window that lost the
+3. A layered-glass scene is layered on top: the workspace sidebar and the composer card get
+   translucent dark backgrounds with `backdrop-filter` blur, driven by the
+   `--zcwp-panel-opacity` / `--zcwp-panel-blur` custom properties (updated live by the sliders).
+4. Images are inlined as data URLs; videos use `file://` (a local TCP server is the fallback).
+5. The daemon polls `/json` every 3 s and re-injects into any ZCode window that lost the
    `window.__ZCWP.on` marker (restarts, new windows), verifying every 15 s.
 
 `app/wallpaper.css` is the external style template. If a future ZCode update changes its
