@@ -1,0 +1,5 @@
+# runtime data (config, cached wallpapers, logs, screenshots)
+app/data/
+
+# shortcut backups created by setup/uninstall
+*.zcwp.bak

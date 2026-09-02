@@ -1,0 +1,59 @@
+/* ZCode Wallpaper v2 — 注入样式（经 adoptedStyleSheets，免疫 CSP）
+   模板占位符由 wallpaper.mjs 替换: __IMG_URL__ __OPACITY__ __BLUR__ __OVERLAY__ */
+
+:root {
+  --zcode-wallpaper-url: url("__IMG_URL__");
+  /* ZCode 3.10.2 实测变量清单 (probe 核对过: 528 个变量中画背景的就这些) */
+  --color-background: transparent !important;
+  --color-background-alt: transparent !important;
+  --color-background-win-alt: transparent !important;
+  --color-panel: transparent !important;
+  --color-surface: transparent !important;
+  --color-surface-hover: transparent !important;
+  --color-idle-task-surface: transparent !important;
+  --color-interaction-ask-surface: transparent !important;
+  --color-interaction-confirmation-surface: transparent !important;
+  /* 旧版猜名, 保留兜底 */
+  --color-background-primary: transparent !important;
+  --color-background-secondary: transparent !important;
+  --color-background-tertiary: transparent !important;
+  --color-bg: transparent !important;
+  --color-card: transparent !important;
+  --color-sidebar: transparent !important;
+  --color-header: transparent !important;
+  --background: transparent !important;
+  --bg: transparent !important;
+  --bg-color: transparent !important;
+}
+
+html {
+  background: transparent !important;
+  /* 图片没挂上时的兜底底色，避免白闪 */
+  background-color: #161616 !important;
+}
+body {
+  background: transparent !important;
+}
+
+/* 常见 React 根容器 */
+#root, #app, #__next, body > div:first-child {
+  background: transparent !important;
+}
+
+/* 壁纸层与遮罩层由 JS 创建（z-index:-1，pointer-events:none），此处仅兜底定义 */
+#zcode-wallpaper-layer {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: -1 !important;
+  pointer-events: none !important;
+  background-position: center !important;
+  background-size: cover !important;
+  background-repeat: no-repeat !important;
+}
+#zcode-wallpaper-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: -1 !important;
+  pointer-events: none !important;
+  background: #000 !important;
+}
