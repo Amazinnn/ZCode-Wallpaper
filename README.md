@@ -32,12 +32,8 @@
 ## 📸 Gallery
 
 <p align="center">
-  <img src="docs/screenshot-panel.png" width="330" alt="Control panel">
-  <img src="docs/theme-nocturne.png" width="330" alt="Nocturne theme">
-  <img src="docs/theme-glassy.png" width="330" alt="Quiet Glass theme">
+  <img src="docs/screenshot-panel.png" width="440" alt="Control panel — 8 sliders, theme switcher">
 </p>
-
-*Left: the control panel. Middle: **Nocturne** — amber glow + smoked glass. Right: **Quiet Glass** — translucent, softer radii.*
 
 ## 🚀 Getting started
 
