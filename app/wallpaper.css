@@ -43,6 +43,15 @@ body { background: transparent !important; }
   position: fixed !important; inset: 0 !important; z-index: -1 !important; pointer-events: none !important;
   background-position: center !important; background-size: cover !important; background-repeat: no-repeat !important;
 }
+/* v1.4 轮播淡入: 新图在层内伪元素淡入, 不插兄弟 DOM → backdrop 采样面稳定, 玻璃无真空期 */
+#zcode-wallpaper-layer::before {
+  content: "";
+  position: absolute !important; inset: 0 !important;
+  background-image: var(--zcwp-next-bg, none);
+  background-position: center !important; background-size: cover !important; background-repeat: no-repeat !important;
+  opacity: var(--zcwp-before-op, 0);
+  transition: opacity .8s ease;
+}
 #zcode-wallpaper-overlay {
   position: fixed !important; inset: 0 !important; z-index: -1 !important; pointer-events: none !important; background: #000 !important;
 }
@@ -85,4 +94,27 @@ html[data-zcwp-theme="glassy"] {
   --radius-xl: 0.875rem !important;
   --radius-2xl: 1.25rem !important;
   --radius-3xl: 1.75rem !important;
+}
+
+/* ---------- 弹窗玻璃 (v1.4) ---------- */
+/* 居中弹窗/模态: 玻璃底 + 毛玻璃, 不透明度带下限保证可读性（不与壁纸融合） */
+[role="dialog"], [aria-modal="true"] {
+  background-color: rgba(var(--zcwp-panel-rgb, 18, 18, 18), max(calc(var(--zcwp-panel-opacity, 0.55) + 0.25), 0.72)) !important;
+  backdrop-filter: blur(calc(var(--zcwp-panel-blur, 10px) * 1.6)) saturate(1.1) !important;
+  -webkit-backdrop-filter: blur(calc(var(--zcwp-panel-blur, 10px) * 1.6)) saturate(1.1) !important;
+}
+/* 全屏路由 overlay（如"升级套餐"页）: 自身 bg-background 被全局透明化打穿。
+   内嵌 web 计费页是 CDP 够不到的 WebContentsView（无法透明化）→
+   页面本体用侧栏同款玻璃配方; webview 黑板嵌成圆角卡片融入设计 */
+section.fixed.inset-0.z-50,
+div.fixed.inset-0.z-50 {
+  background: rgba(var(--zcwp-panel-rgb, 18, 18, 18), var(--zcwp-panel-opacity, 0.55)) !important;
+  backdrop-filter: blur(var(--zcwp-panel-blur, 10px)) !important;
+  -webkit-backdrop-filter: blur(var(--zcwp-panel-blur, 10px)) !important;
+}
+[data-testid="coding-plan-embedded-webview"] {
+  border-radius: 12px !important;
+  border: 1px solid rgba(var(--zcwp-sep-rgb, 255, 255, 255), 0.08) !important;
+  overflow: hidden !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35) !important;
 }

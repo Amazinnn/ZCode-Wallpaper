@@ -1,11 +1,11 @@
 <p align="center">
   <b>ZCode Wallpaper</b><br>
-  <i>One 100&nbsp;KB single-file EXE that wears ZCode's desktop bed in live wallpapers — images, animated GIFs, even video — without touching a single ZCode file.</i>
+  <i>One ~150&nbsp;KB single-file EXE that wears ZCode's desktop bed in live wallpapers — images, animated GIFs, even video — plus rotation, glass dialogs and a music layer, without touching a single ZCode file.</i>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows_10%2F11-0078d4?logo=windows" alt="Platform">
-  <img src="https://img.shields.io/badge/version-v1.2.0-e8a33d" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.4.0-e8a33d" alt="Version">
   <img src="https://img.shields.io/badge/language-C%23_5-68217a?logo=.net" alt="Language">
   <img src="https://img.shields.io/badge/dependencies-none-27ae60" alt="Dependencies">
   <img src="https://img.shields.io/badge/license-MIT-4f8cc9" alt="License">
@@ -20,14 +20,14 @@
 ## ✨ Features
 
 - **🖼 Live wallpapers** — PNG / JPG / WebP, animated GIF, and full-screen video (MP4 / WebM, muted & looping; the video auto-pauses when ZCode loses focus to save CPU).
+- **🔄 Wallpaper rotation** — point it at a folder and it cycles your collection with a smooth cross-fade (images only; music keeps playing through the switch — the fade happens inside the layer, no re-injection). Sequential or random, interval from 1 to 60 minutes.
 - **🎵 Music layer** — play any music file (MP3/WAV/OGG/M4A/FLAC) as an independent layer, or turn on the video wallpaper's own soundtrack. Pause/play and volume right from the panel. Optionally follow the ZCode window — minimized or hidden means auto-pause, back in focus means resume.
 - **🎛 8 real-time sliders** — opacity, brightness, saturation, contrast, overlay, blur, panel-glass opacity, panel-glass blur. Dragging a slider changes ZCode instantly — what you tweak is what you see, zero "Apply" round-trips.
-- **🥃 Layered glass UI** — the wallpaper is the star, and the workspace sidebar + composer float above it as translucent frosted-glass panels with subtle separators. No flat "everything transparent" look.
-- **🎨 Theme presets** — one-click moods built on the Codex skin community's playbook:
-  **Nocturne** (`ink-black + smoked glass + amber glow`) and **Quiet Glass** (low-contrast translucent panels, softer radii). Switch live from the panel.
+- **🥃 Layered glass UI** — the wallpaper is the star, and the workspace sidebar + composer float above it as translucent frosted-glass panels with subtle separators. No flat "everything transparent" look. Full-screen route overlays (like the upgrade page) and modal dialogs get the same glass treatment, so nothing melts into the wallpaper.
+- **🎨 Theme presets & color pickers** — one-click moods built on the Codex skin community's playbook: **Nocturne** (`ink-black + smoked glass + amber glow`) and **Quiet Glass** (low-contrast translucent panels, softer radii). Two color pickers (accent + glass tint) override the palette live; a `custom.css` escape hatch gives power users the last word on any style.
 - **🛡 Update-proof** — injection happens through the Chrome DevTools Protocol. ZCode's `app.asar` is never modified, so app updates cannot break it.
 - **🌙 Silent daemon** — re-applies the wallpaper after ZCode restarts or opens new windows; registered for auto-start, zero windows, zero clicks.
-- **📦 One file, zero dependencies** — ~100 KB compiled C# 5 (runs on the .NET Framework that ships with Windows), no Node, no runtime, no scripts, no admin rights.
+- **📦 One file, zero dependencies** — ~150 KB compiled C# 5 (runs on the .NET Framework that ships with Windows), no Node, no runtime, no scripts, no admin rights.
 - **🗑 Restore in two clicks** — tray menu → "Uninstall & restore" puts the stock ZCode back and cleans up every shortcut and autostart entry.
 
 ## 📸 Gallery
@@ -54,11 +54,15 @@ ZCodeWallpaper.exe setup
 ```
 ZCodeWallpaper.exe apply <path> [--opacity 55] [--brightness 100] [--saturation 100]
                                    [--contrast 100] [--overlay 30] [--blur 0]
-                                   [--panel-opacity 55] [--panel-blur 10] [--theme nocturne|glassy|default] [--video-sound on|off]
+                                   [--panel-opacity 55] [--panel-blur 10] [--theme nocturne|glassy|default]
+                                   [--video-sound on|off] [--accent "R,G,B|#RRGGBB|default"] [--glass "R,G,B|#RRGGBB|default"]
 ZCodeWallpaper.exe music <path> [--volume 60]   # set & play a music file (independent layer)
 ZCodeWallpaper.exe music-off                    # stop and clear music
+ZCodeWallpaper.exe rotate <folder> [--minutes 15] [--order seq|random]
+                                   # cycle every image in a folder, cross-faded
+ZCodeWallpaper.exe rotate-off                   # stop rotation (keep current wallpaper)
 ZCodeWallpaper.exe clear            # remove the wallpaper layer, keep config
-ZCodeWallpaper.exe status           # CDP / window / wallpaper status
+ZCodeWallpaper.exe status           # CDP / window / wallpaper / rotation status
 ZCodeWallpaper.exe shot <out.png>   # screenshot of the ZCode window
 ZCodeWallpaper.exe setup            # shortcuts flag + autostart + desktop entry
 ZCodeWallpaper.exe uninstall        # full restore to stock ZCode
@@ -80,7 +84,9 @@ The port is loopback-only, so nothing outside your machine can reach it.
 
 ## 🎨 Customization
 
-`app/wallpaper.css` is the entire injected style template — themes, glass panels, and the transparency list all live there as plain CSS custom properties. If a future ZCode update introduces new background variables, add them to this one file — **no recompile needed**.
+`app/wallpaper.css` is the entire injected style template — themes, glass panels, dialog/overlay glass, and the transparency list all live there as plain CSS custom properties. If a future ZCode update introduces new background variables, add them to this one file — **no recompile needed**.
+
+For everything more personal — button styles, radii, fonts, any selector — drop an `app/custom.css` next to it. It is appended after the built-in styles on every injection, so it always wins.
 
 ## 🔨 Build
 

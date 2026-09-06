@@ -4,3 +4,4 @@ app/data/
 # shortcut backups created by setup/uninstall
 *.zcwp.bak
 release/
+openspec/

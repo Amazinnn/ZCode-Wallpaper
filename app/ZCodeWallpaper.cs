@@ -395,6 +395,11 @@ internal sealed class Config
     public double MusicVolume = 0.6;
     public bool MusicAutoplay = true; // 跟随 ZCode 窗口可见性
     public bool VideoSound = false;
+    public string RotateDir = "";       // 轮播文件夹（空=关闭）
+    public double RotateMinutes = 15;
+    public string RotateOrder = "seq";  // seq | random
+    public string AccentColor = "";     // "R,G,B"，空=主题默认
+    public string GlassColor = "";      // "R,G,B"，空=主题默认
 
     public static string PathOf { get { return Path.Combine(Program.DataDir, "config.json"); } }
     public static Config Load()
@@ -428,6 +433,11 @@ internal sealed class Config
                     if (d.ContainsKey("videoSound")) c.VideoSound = MiniJson.Num(d["videoSound"], 0) > 0 || (d["videoSound"] is bool && (bool)d["videoSound"]);
                 }
             }
+            if (d.ContainsKey("rotateDir")) c.RotateDir = MiniJson.Str(d["rotateDir"]) ?? "";
+            if (d.ContainsKey("rotateMinutes")) c.RotateMinutes = MiniJson.Num(d["rotateMinutes"], c.RotateMinutes);
+            if (d.ContainsKey("rotateOrder")) c.RotateOrder = MiniJson.Str(d["rotateOrder"]) ?? "seq";
+            if (d.ContainsKey("accentColor")) c.AccentColor = MiniJson.Str(d["accentColor"]) ?? "";
+            if (d.ContainsKey("glassColor")) c.GlassColor = MiniJson.Str(d["glassColor"]) ?? "";
             return c;
         }
         catch { return null; }
@@ -451,6 +461,11 @@ internal sealed class Config
         sb.Append("\",\"musicVolume\":").Append(MusicVolume.ToString(System.Globalization.CultureInfo.InvariantCulture));
         sb.Append(",\"musicAutoplay\":").Append(MusicAutoplay ? "true" : "false");
         sb.Append(",\"videoSound\":").Append(VideoSound ? "true" : "false");
+        sb.Append(",\"rotateDir\":\"").Append(MiniJson.Escape(RotateDir)).Append("\"");
+        sb.Append(",\"rotateMinutes\":").Append(RotateMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        sb.Append(",\"rotateOrder\":\"").Append(MiniJson.Escape(RotateOrder)).Append("\"");
+        sb.Append(",\"accentColor\":\"").Append(MiniJson.Escape(AccentColor)).Append("\"");
+        sb.Append(",\"glassColor\":\"").Append(MiniJson.Escape(GlassColor)).Append("\"");
         sb.Append(",\"updatedAt\":\"").Append(DateTime.UtcNow.ToString("o")).Append("\"}");
         File.WriteAllText(Config.PathOf, sb.ToString());
     }
@@ -470,6 +485,26 @@ internal static class Util
     public static bool IsVideo(string ext) { ext = ext.ToLowerInvariant(); return ext == ".mp4" || ext == ".webm" || ext == ".mov"; }
     public static bool IsAudio(string ext) { ext = ext.ToLowerInvariant(); return ext == ".mp3" || ext == ".wav" || ext == ".ogg" || ext == ".m4a" || ext == ".flac"; }
     public static long MaxBytes { get { return 200 * 1024 * 1024; } }
+
+    /// <summary>解析颜色 "R,G,B" / "R G B" / "#RRGGBB" → 规范 "R,G,B"；无效返回 null</summary>
+    public static string NormalizeRgb(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return null;
+        s = s.Trim().Trim('"');
+        int r, g, b;
+        string hex = s.StartsWith("#") ? s.Substring(1) : null;
+        if (hex != null && hex.Length == 6
+            && int.TryParse(hex.Substring(0, 2), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out r)
+            && int.TryParse(hex.Substring(2, 2), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out g)
+            && int.TryParse(hex.Substring(4, 2), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out b))
+            return Clamp255(r) + "," + Clamp255(g) + "," + Clamp255(b);
+        var parts = s.Replace(' ', ',').Split(',');
+        if (parts.Length == 3
+            && int.TryParse(parts[0].Trim(), out r) && int.TryParse(parts[1].Trim(), out g) && int.TryParse(parts[2].Trim(), out b))
+            return Clamp255(r) + "," + Clamp255(g) + "," + Clamp255(b);
+        return null;
+    }
+    private static int Clamp255(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
 
     /// <summary>路径清洗: 去空白/成对引号(单双全半角)、/d/xx 与 d:/xx 统一为 d:\xx</summary>
     public static string NormalizePath(string s)
@@ -538,7 +573,7 @@ async (cfg) => {
   window.__ZCWP = window.__ZCWP || {};
   const W = window.__ZCWP;
   const teardown = () => {
-    for (const id of ['zcode-wallpaper-layer', 'zcode-wallpaper-overlay']) {
+    for (const id of ['zcode-wallpaper-layer', 'zcode-wallpaper-overlay', 'zcode-wallpaper-fade']) {
       const el = document.getElementById(id); if (el) el.remove();
     }
     for (const id of ['zcode-wallpaper-audio']) {
@@ -550,7 +585,7 @@ async (cfg) => {
       if (i >= 0) { const c = [...document.adoptedStyleSheets]; c.splice(i, 1); document.adoptedStyleSheets = c; }
       W.sheet = null;
     }
-    W.on = false; W.applyParams = null; W.setMusic = null; W.video = null; W.audio = null;
+    W.on = false; W.applyParams = null; W.setMusic = null; W.swapImage = null; W.video = null; W.audio = null;
   };
   teardown();
   if (!cfg.on) return 'CLEARED';
@@ -607,6 +642,10 @@ async (cfg) => {
     if (o) o.style.opacity = p.overlay;
     document.documentElement.style.setProperty('--zcwp-panel-opacity', p.panelOpacity);
     document.documentElement.style.setProperty('--zcwp-panel-blur', p.panelBlur + 'px');
+    if (p.accentColor) document.documentElement.style.setProperty('--color-accent', p.accentColor);
+    else document.documentElement.style.removeProperty('--color-accent');
+    if (p.glassColor) document.documentElement.style.setProperty('--zcwp-panel-rgb', p.glassColor);
+    else document.documentElement.style.removeProperty('--zcwp-panel-rgb');
     if (p.theme) document.documentElement.setAttribute('data-zcwp-theme', p.theme);
     if (W.video) { W.video.muted = !(p.videoSound === true); W.video.volume = p.musicVolume !== undefined ? p.musicVolume : 0.6; }
     if (W.audio && p.musicVolume !== undefined) W.audio.volume = p.musicVolume;
@@ -625,8 +664,24 @@ async (cfg) => {
     if (W.audio) { try { W.audio.pause(); } catch (e) {} W.audio.remove(); W.audio = null; }
     return 'OK';
   };
+  W.swapImage = (src) => {
+    if (W.video) return 'VIDEO';
+    const l = document.getElementById('zcode-wallpaper-layer');
+    if (!l) return 'NO';
+    const u = 'url(' + JSON.stringify(src) + ')';
+    // 伪元素方案: 新图在壁纸层内部(::before)淡入, 不插兄弟 DOM — backdrop-filter 采样面保持稳定, 玻璃无真空期
+    l.style.setProperty('--zcwp-next-bg', u);
+    void l.offsetWidth;
+    requestAnimationFrame(() => { l.style.setProperty('--zcwp-before-op', '1'); });
+    setTimeout(() => {
+      l.style.backgroundImage = u;
+      l.style.setProperty('--zcwp-next-bg', 'none');
+      l.style.setProperty('--zcwp-before-op', '0');
+    }, 900);
+    return 'OK';
+  };
   W.applyParams(cfg);
-  W.ver = 3; W.on = true;
+  W.ver = 4; W.on = true;
   return 'OK';
 }";
 
@@ -638,17 +693,34 @@ async (cfg) => {
             try { musicUrl = Util.FileUrl(Path.Combine(Program.DataDir, "music" + Path.GetExtension(c.MusicPath))); } catch { }
         }
         return string.Format(System.Globalization.CultureInfo.InvariantCulture,
-            "{{\"on\":true,\"img\":\"{0}\",\"video\":{1},\"opacity\":{2},\"brightness\":{3},\"saturation\":{4},\"contrast\":{5},\"overlay\":{6},\"blur\":{7},\"panelOpacity\":{8},\"panelBlur\":{9},\"theme\":\"{10}\",\"music\":{11},\"musicVolume\":{12},\"musicAutoplay\":{13},\"videoSound\":{14},\"css\":\"{15}\"}}",
+            "{{\"on\":true,\"img\":\"{0}\",\"video\":{1},\"opacity\":{2},\"brightness\":{3},\"saturation\":{4},\"contrast\":{5},\"overlay\":{6},\"blur\":{7},\"panelOpacity\":{8},\"panelBlur\":{9},\"theme\":\"{10}\",\"music\":{11},\"musicVolume\":{12},\"musicAutoplay\":{13},\"videoSound\":{14},\"css\":\"{15}\",\"accentColor\":\"{16}\",\"glassColor\":\"{17}\"}}",
             MiniJson.Escape(url), video ? "true" : "false", c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur, c.PanelOpacity, c.PanelBlur, MiniJson.Escape(c.Theme),
             (musicUrl.Length > 0 ? "\"" + MiniJson.Escape(musicUrl) + "\"" : "null"),
-            c.MusicVolume, c.MusicAutoplay ? "true" : "false", c.VideoSound ? "true" : "false", MiniJson.Escape(css));
+            c.MusicVolume, c.MusicAutoplay ? "true" : "false", c.VideoSound ? "true" : "false", MiniJson.Escape(css),
+            MiniJson.Escape(string.IsNullOrEmpty(c.AccentColor) ? "" : "rgb(" + c.AccentColor + ")"),
+            MiniJson.Escape(c.GlassColor ?? ""));
+    }
+
+    /// <summary>app\custom.css 逃生舱: 存在即拼接在主题样式之后（仅注入时读取, 改后需重注入）</summary>
+    private static string CustomCss()
+    {
+        try
+        {
+            string p = Path.Combine(Program.ExeDir, "custom.css");
+            if (File.Exists(p)) return File.ReadAllText(p);
+        }
+        catch { }
+        return "";
     }
 
     public static async Task<string> InjectAsync(Config c, string targetWsUrl, string url, bool video)
     {
         using (var cdp = await Cdp.ConnectAsync(targetWsUrl).ConfigureAwait(false))
         {
-            string expr = "(" + InjectFn + ")(" + CfgJson(c, url, video, BuildCss(video)) + ")";
+            string css = BuildCss(video);
+            string custom = CustomCss();
+            if (custom.Length > 0) css = css + "\n/* custom.css */\n" + custom;
+            string expr = "(" + InjectFn + ")(" + CfgJson(c, url, video, css) + ")";
             return await cdp.EvaluateAsync(expr).ConfigureAwait(false);
         }
     }
@@ -666,8 +738,10 @@ async (cfg) => {
     public static async Task<string> LiveUpdateAsync(string targetWsUrl, Config c)
     {
         string expr = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-            "(() => {{ const W = window.__ZCWP; if (!W || !W.on || !W.applyParams) return 'NO'; W.applyParams({{opacity:{0},brightness:{1},saturation:{2},contrast:{3},overlay:{4},blur:{5},panelOpacity:{6},panelBlur:{7},theme:\"{8}\",musicVolume:{9},videoSound:{10}}}); return 'OK'; }})()",
-            c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur, c.PanelOpacity, c.PanelBlur, MiniJson.Escape(c.Theme), c.MusicVolume, c.VideoSound ? "true" : "false");
+            "(() => {{ const W = window.__ZCWP; if (!W || !W.on || !W.applyParams) return 'NO'; W.applyParams({{opacity:{0},brightness:{1},saturation:{2},contrast:{3},overlay:{4},blur:{5},panelOpacity:{6},panelBlur:{7},theme:\"{8}\",musicVolume:{9},videoSound:{10},accentColor:\"{11}\",glassColor:\"{12}\"}}); return 'OK'; }})()",
+            c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur, c.PanelOpacity, c.PanelBlur, MiniJson.Escape(c.Theme), c.MusicVolume, c.VideoSound ? "true" : "false",
+            MiniJson.Escape(string.IsNullOrEmpty(c.AccentColor) ? "" : "rgb(" + c.AccentColor + ")"),
+            MiniJson.Escape(c.GlassColor ?? ""));
         using (var cdp = await Cdp.ConnectAsync(targetWsUrl).ConfigureAwait(false))
         {
             return await cdp.EvaluateAsync(expr).ConfigureAwait(false);
@@ -692,6 +766,17 @@ async (cfg) => {
             + " return 'OK';"
             + " }})()",
             (src != null && src.Length > 0 ? "\"" + MiniJson.Escape(src) + "\"" : "null"), volume, autoplay ? "true" : "false", playing);
+        using (var cdp = await Cdp.ConnectAsync(targetWsUrl).ConfigureAwait(false))
+        {
+            return await cdp.EvaluateAsync(expr).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>轮播换图: 图层内淡入替换（不 teardown, 音乐不受影响）。返回 OK / NO(旧层或无注入层) / VIDEO。</summary>
+    public static async Task<string> SwapImageAsync(string targetWsUrl, string url)
+    {
+        string expr = "(() => { const W = window.__ZCWP; if (!W || !W.on || !W.swapImage) return 'NO'; return W.swapImage(\""
+            + MiniJson.Escape(url) + "\"); })()";
         using (var cdp = await Cdp.ConnectAsync(targetWsUrl).ConfigureAwait(false))
         {
             return await cdp.EvaluateAsync(expr).ConfigureAwait(false);
@@ -801,6 +886,12 @@ internal static class Watch
 {
     private static readonly HashSet<string> Tracked = new HashSet<string>();
     private static readonly object Gate = new object();
+    private static DateTime _nextRotateAt = DateTime.MinValue; // MinValue=到期待换
+    private static int _rotIdx = -1;
+    private static readonly Random _rand = new Random();
+
+    /// <summary>GUI/CLI 设置轮播后调用: 下个 tick(≤3s) 立即换第一张</summary>
+    public static void RequestImmediateRotate() { _nextRotateAt = DateTime.MinValue; }
 
     public static async Task Run(CancellationToken cancel)
     {
@@ -856,6 +947,7 @@ internal static class Watch
                             if (tick % 20 == 1) Util.Log("注入异常 " + t.Url + ": " + ex.Message);
                         }
                     }
+                    await TryRotate(cfg, targets, cancel).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
@@ -865,6 +957,85 @@ internal static class Watch
             }
             await Task.Delay(3000, cancel).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>轮播 tick: 仅图片壁纸时按间隔换目录里的下一张/随机一张。换图走图层内替换, 音乐与注入层不受影响。</summary>
+    private static async Task TryRotate(Config cfg, List<Injector.Target> targets, CancellationToken cancel)
+    {
+        if (string.IsNullOrEmpty(cfg.RotateDir) || cfg.Type != "image") return; // 视频壁纸时轮播挂起
+        if (targets == null || targets.Count == 0) return; // ZCode 未开: 保持到期待出现
+        if (DateTime.Now < _nextRotateAt) return;
+        var files = ListRotateImages(cfg.RotateDir);
+        if (files.Count == 0)
+        {
+            Util.Log("轮播目录无可用图片: " + cfg.RotateDir);
+            _nextRotateAt = DateTime.Now.AddMinutes(Math.Max(cfg.RotateMinutes, 1));
+            return;
+        }
+        int idx;
+        if (cfg.RotateOrder == "random") idx = _rand.Next(files.Count);
+        else { _rotIdx = (_rotIdx + 1) % files.Count; idx = _rotIdx; }
+        for (int attempt = 0; attempt < Math.Min(3, files.Count); attempt++) // 坏文件顺延, 最多试 3 张
+        {
+            if (cancel.IsCancellationRequested) return;
+            string pick = files[(idx + attempt) % files.Count];
+            string ext = Path.GetExtension(pick).ToLowerInvariant();
+            string mime = Util.MimeFor(ext);
+            if (mime == null) continue;
+            string cached = Path.Combine(Program.DataDir, "wallpaper" + ext);
+            try
+            {
+                if (!string.Equals(Path.GetFullPath(pick), Path.GetFullPath(cached), StringComparison.OrdinalIgnoreCase))
+                    File.Copy(pick, cached, true);
+            }
+            catch { continue; }
+            // URL 降级链: dataURL → file://（与 Apply 同款）
+            string url = "data:" + mime + ";base64," + Convert.ToBase64String(File.ReadAllBytes(cached));
+            string probe = await Injector.CheckMediaAsync(targets[0].WsUrl, url, false).ConfigureAwait(false);
+            if (probe != "OK")
+            {
+                url = Util.FileUrl(cached);
+                probe = await Injector.CheckMediaAsync(targets[0].WsUrl, url, false).ConfigureAwait(false);
+                if (probe != "OK") continue;
+            }
+            // 先落配置再换: 中途自愈重注入也是新图
+            cfg.SourcePath = pick;
+            cfg.CachedFile = cached;
+            cfg.Save();
+            foreach (var t in targets)
+            {
+                try
+                {
+                    string r = await Injector.SwapImageAsync(t.WsUrl, url).ConfigureAwait(false);
+                    if (r == "OK") continue;
+                    string u2; bool v2; // 旧版注入层(无 swapImage): 全量重注入兜底
+                    if (ResolveMediaUrl(cfg, out u2, out v2))
+                        await Injector.InjectAsync(cfg, t.WsUrl, u2, v2).ConfigureAwait(false);
+                }
+                catch { }
+            }
+            Util.Log("轮播 → " + pick);
+            break;
+        }
+        _nextRotateAt = DateTime.Now.AddMinutes(Math.Max(cfg.RotateMinutes, 1));
+    }
+
+    /// <summary>枚举轮播目录里的图片（png/jpg/jpeg/webp/gif, ≤30MiB, 按文件名排序）</summary>
+    public static List<string> ListRotateImages(string dir)
+    {
+        var exts = new HashSet<string> { ".png", ".jpg", ".jpeg", ".webp", ".gif" };
+        var list = new List<string>();
+        try
+        {
+            foreach (var f in Directory.GetFiles(dir))
+            {
+                if (!exts.Contains(Path.GetExtension(f).ToLowerInvariant())) continue;
+                try { if (new FileInfo(f).Length <= 30L * 1024 * 1024) list.Add(f); } catch { }
+            }
+            list.Sort(StringComparer.OrdinalIgnoreCase);
+        }
+        catch { }
+        return list;
     }
 
     /// <summary>把配置里的缓存文件解析成可用的 URL（图片 data URL / 视频 file://→本地服务），返回 false 表示文件缺失。</summary>
@@ -920,8 +1091,30 @@ body { background: transparent !important; }
   position: fixed !important; inset: 0 !important; z-index: -1 !important; pointer-events: none !important;
   background-position: center !important; background-size: cover !important; background-repeat: no-repeat !important;
 }
+#zcode-wallpaper-layer::before {
+  content: """"; position: absolute !important; inset: 0 !important;
+  background-image: var(--zcwp-next-bg, none);
+  background-position: center !important; background-size: cover !important; background-repeat: no-repeat !important;
+  opacity: var(--zcwp-before-op, 0); transition: opacity .8s ease;
+}
 #zcode-wallpaper-overlay {
   position: fixed !important; inset: 0 !important; z-index: -1 !important; pointer-events: none !important; background: #000 !important;
+}
+[role=""dialog""], [aria-modal=""true""] {
+  background-color: rgba(var(--zcwp-panel-rgb, 18, 18, 18), max(calc(var(--zcwp-panel-opacity, 0.55) + 0.25), 0.72)) !important;
+  backdrop-filter: blur(calc(var(--zcwp-panel-blur, 10px) * 1.6)) saturate(1.1) !important;
+  -webkit-backdrop-filter: blur(calc(var(--zcwp-panel-blur, 10px) * 1.6)) saturate(1.1) !important;
+}
+section.fixed.inset-0.z-50, div.fixed.inset-0.z-50 {
+  background: rgba(var(--zcwp-panel-rgb, 18, 18, 18), var(--zcwp-panel-opacity, 0.55)) !important;
+  backdrop-filter: blur(var(--zcwp-panel-blur, 10px)) !important;
+  -webkit-backdrop-filter: blur(var(--zcwp-panel-blur, 10px)) !important;
+}
+[data-testid=""coding-plan-embedded-webview""] {
+  border-radius: 12px !important;
+  border: 1px solid rgba(var(--zcwp-sep-rgb, 255, 255, 255), 0.08) !important;
+  overflow: hidden !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35) !important;
 }
 ";
 }
@@ -943,6 +1136,9 @@ internal sealed class MainForm : Form
     private Label _musicVolumeV;
     private CheckBox _musicFollowChk, _videoSoundChk;
     private bool _musicPlaying;
+    private TextBox _rotatePathBox;
+    private ComboBox _rotateIntervalCombo, _rotateOrderCombo;
+    private Button _accentBtn, _glassBtn;
     private System.Windows.Forms.Timer _throttle;
     private Config _cfg;
     private bool _exitRequested;
@@ -966,6 +1162,11 @@ internal sealed class MainForm : Form
         ThreadPool.RegisterWaitForSingleObject(_exitEv,
             (s, timedOut) => { try { BeginInvoke((Action)ExitApp); } catch { } },
             null, -1, false);
+        // CLI rotate → 守护立即轮换（跨进程信号; CLI 进程里 RequestImmediateRotate 够不到守护的静态量）
+        var rotateNowEv = new EventWaitHandle(false, EventResetMode.AutoReset, "ZCodeWallpaperRotateNow");
+        ThreadPool.RegisterWaitForSingleObject(rotateNowEv,
+            (s, timedOut) => { Watch.RequestImmediateRotate(); },
+            null, -1, false);
         if (!startHidden) ShowPanel();
     }
 
@@ -979,7 +1180,7 @@ internal sealed class MainForm : Form
 
     private void BuildTray()
     {
-        _tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "ZCode 壁纸 v3", Visible = true };
+        _tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "ZCode 壁纸 v1.4", Visible = true };
         var menu = new ContextMenu();
         menu.MenuItems.Add("打开面板", delegate { ShowPanel(); });
         menu.MenuItems.Add("截图检查", delegate { ShotAsync(); });
@@ -1012,11 +1213,11 @@ internal sealed class MainForm : Form
 
     private void BuildUi()
     {
-        Text = "ZCode 壁纸 v3";
+        Text = "ZCode 壁纸 v1.4";
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(480, 660);
+        ClientSize = new Size(480, 760);
         Font = new Font("Microsoft YaHei UI", 9F);
 
         _status = new Label { Location = new Point(12, 10), Size = new Size(456, 22), Text = "状态: 检测中…" };
@@ -1071,6 +1272,8 @@ internal sealed class MainForm : Form
         _panelOpacity = MakeSlider(ref y, "面板玻璃", 0, 100, ref _panelOpacityV);
         _panelBlur = MakeSlider(ref y, "毛玻璃 px", 0, 30, ref _panelBlurV);
         BuildMusicUi();
+        BuildRotateUi();
+        BuildCustomUi();
         SetSlidersFromConfig();
     }
 
@@ -1131,6 +1334,126 @@ internal sealed class MainForm : Form
             _throttle.Start();
         };
         Controls.Add(_videoSoundChk);
+    }
+
+    private void BuildRotateUi()
+    {
+        Controls.Add(new Label { Location = new Point(12, 662), Size = new Size(76, 20), Text = "轮播文件夹:" });
+        _rotatePathBox = new TextBox { Location = new Point(88, 659), Size = new Size(210, 23), ReadOnly = true };
+        Controls.Add(_rotatePathBox);
+        var rotBrowse = new Button { Location = new Point(304, 658), Size = new Size(70, 25), Text = "浏览…" };
+        rotBrowse.Click += delegate
+        {
+            using (var dlg = new FolderBrowserDialog())
+            {
+                dlg.Description = "选择壁纸轮播文件夹（png/jpg/jpeg/webp/gif）";
+                if (dlg.ShowDialog(this) == DialogResult.OK) SetRotateFolder(dlg.SelectedPath);
+            }
+        };
+        Controls.Add(rotBrowse);
+        var rotStop = new Button { Location = new Point(380, 658), Size = new Size(88, 25), Text = "停止轮播" };
+        rotStop.Click += delegate { StopRotate(); };
+        Controls.Add(rotStop);
+
+        Controls.Add(new Label { Location = new Point(12, 694), Size = new Size(40, 20), Text = "间隔" });
+        _rotateIntervalCombo = new ComboBox { Location = new Point(52, 691), Size = new Size(90, 24), DropDownStyle = ComboBoxStyle.DropDownList };
+        _rotateIntervalCombo.Items.AddRange(new object[] { "1 分钟", "5 分钟", "15 分钟", "30 分钟", "60 分钟" });
+        _rotateIntervalCombo.SelectedIndexChanged += delegate
+        {
+            if (_loadingSliders) return;
+            int[] mins = { 1, 5, 15, 30, 60 };
+            if (_rotateIntervalCombo.SelectedIndex >= 0) { _cfg.RotateMinutes = mins[_rotateIntervalCombo.SelectedIndex]; _cfg.Save(); }
+        };
+        Controls.Add(_rotateIntervalCombo);
+        Controls.Add(new Label { Location = new Point(160, 694), Size = new Size(40, 20), Text = "顺序" });
+        _rotateOrderCombo = new ComboBox { Location = new Point(200, 691), Size = new Size(90, 24), DropDownStyle = ComboBoxStyle.DropDownList };
+        _rotateOrderCombo.Items.AddRange(new object[] { "顺序", "随机" });
+        _rotateOrderCombo.SelectedIndexChanged += delegate
+        {
+            if (_loadingSliders) return;
+            _cfg.RotateOrder = _rotateOrderCombo.SelectedIndex == 1 ? "random" : "seq";
+            _cfg.Save();
+        };
+        Controls.Add(_rotateOrderCombo);
+    }
+
+    private void BuildCustomUi()
+    {
+        Controls.Add(new Label { Location = new Point(12, 728), Size = new Size(56, 20), Text = "强调色" });
+        _accentBtn = new Button { Location = new Point(68, 724), Size = new Size(90, 26), Text = "选择…" };
+        _accentBtn.Click += delegate { PickColor("accent"); };
+        Controls.Add(_accentBtn);
+        Controls.Add(new Label { Location = new Point(180, 728), Size = new Size(56, 20), Text = "玻璃色" });
+        _glassBtn = new Button { Location = new Point(236, 724), Size = new Size(90, 26), Text = "选择…" };
+        _glassBtn.Click += delegate { PickColor("glass"); };
+        Controls.Add(_glassBtn);
+        var resetBtn = new Button { Location = new Point(344, 724), Size = new Size(124, 26), Text = "恢复默认配色" };
+        resetBtn.Click += delegate { ResetColors(); };
+        Controls.Add(resetBtn);
+    }
+
+    private async void SetRotateFolder(string rawPath)
+    {
+        string path = Util.NormalizePath(rawPath);
+        if (!Directory.Exists(path)) { SetStatus("[X] 目录不存在: " + path); return; }
+        var imgs = Watch.ListRotateImages(path);
+        if (imgs.Count == 0) { SetStatus("[X] 目录里没有可用图片 (png/jpg/jpeg/webp/gif, ≤30MiB)"); return; }
+        _cfg.RotateDir = path;
+        _cfg.Save();
+        _rotatePathBox.Text = path;
+        Watch.RequestImmediateRotate();
+        SetStatus("轮播已设置 (" + imgs.Count + " 张), 3 秒内换第一张");
+    }
+
+    private void StopRotate()
+    {
+        _cfg.RotateDir = "";
+        _cfg.Save();
+        _rotatePathBox.Text = "";
+        SetStatus("轮播已停止（当前壁纸保留）");
+    }
+
+    private void PickColor(string which)
+    {
+        using (var dlg = new ColorDialog { FullOpen = true })
+        {
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            string rgb = dlg.Color.R + "," + dlg.Color.G + "," + dlg.Color.B;
+            if (which == "accent") _cfg.AccentColor = rgb; else _cfg.GlassColor = rgb;
+            _cfg.Save();
+            UpdateColorButtons();
+            LiveUpdateAsync();
+            SetStatus("配色已更新 ✓");
+        }
+    }
+
+    private void ResetColors()
+    {
+        _cfg.AccentColor = "";
+        _cfg.GlassColor = "";
+        _cfg.Save();
+        UpdateColorButtons();
+        LiveUpdateAsync();
+        SetStatus("已恢复默认配色 ✓");
+    }
+
+    private void UpdateColorButtons()
+    {
+        SetColorButton(_accentBtn, _cfg.AccentColor);
+        SetColorButton(_glassBtn, _cfg.GlassColor);
+    }
+
+    private static void SetColorButton(Button b, string rgb)
+    {
+        string norm = Util.NormalizeRgb(rgb);
+        if (norm != null)
+        {
+            var p = norm.Split(',');
+            b.BackColor = Color.FromArgb(int.Parse(p[0]), int.Parse(p[1]), int.Parse(p[2]));
+            b.UseVisualStyleBackColor = false;
+            b.Text = "";
+        }
+        else { b.BackColor = SystemColors.Control; b.UseVisualStyleBackColor = true; b.Text = "选择…"; }
     }
 
     private string MusicCachePath()
@@ -1275,6 +1598,13 @@ internal sealed class MainForm : Form
         _musicPathBox.Text = _cfg.MusicPath;
         _musicPlaying = false;
         _musicPlayBtn.Text = "▶ 播放";
+        _rotatePathBox.Text = _cfg.RotateDir;
+        int[] rotMins = { 1, 5, 15, 30, 60 };
+        int rotIdx = 2;
+        for (int i = 0; i < rotMins.Length; i++) { if (Math.Abs(_cfg.RotateMinutes - rotMins[i]) < 0.5) rotIdx = i; }
+        _rotateIntervalCombo.SelectedIndex = rotIdx;
+        _rotateOrderCombo.SelectedIndex = _cfg.RotateOrder == "random" ? 1 : 0;
+        UpdateColorButtons();
         _loadingSliders = false;
     }
 
@@ -1638,6 +1968,38 @@ internal static class Cli
                 Out("[OK] 音乐已清除");
                 return;
             }
+            if (verb == "rotate")
+            {
+                if (args.Length < 2) { Out("用法: ZCodeWallpaper.exe rotate <文件夹> [--minutes 15] [--order seq|random]"); return; }
+                string dir = Util.NormalizePath(args[1]);
+                if (!Directory.Exists(dir)) { Out("[X] 目录不存在: " + dir); Environment.ExitCode = 1; return; }
+                var imgs = Watch.ListRotateImages(dir);
+                if (imgs.Count == 0) { Out("[X] 目录里没有可用图片 (png/jpg/jpeg/webp/gif, ≤30MiB)"); Environment.ExitCode = 1; return; }
+                var cfgR = Config.Load() ?? new Config();
+                cfgR.RotateDir = dir;
+                var optsR = ParseOpts(args, 2);
+                double mm;
+                if (optsR.TryGetValue("minutes", out mm) && mm >= 1) cfgR.RotateMinutes = mm;
+                for (int i = 2; i + 1 < args.Length; i++)
+                {
+                    if (args[i] == "--order")
+                    {
+                        string o = (args[i + 1] ?? "").Trim().ToLowerInvariant();
+                        if (o == "random" || o == "seq") cfgR.RotateOrder = o;
+                    }
+                }
+                cfgR.Save();
+                try { using (var ev = System.Threading.EventWaitHandle.OpenExisting("ZCodeWallpaperRotateNow")) { ev.Set(); } } catch { }
+                Out("[OK] 轮播已设置: " + imgs.Count + " 张, 每 " + cfgR.RotateMinutes + " 分钟 (" + cfgR.RotateOrder + ")。守护 3 秒内换第一张。");
+                return;
+            }
+            if (verb == "rotate-off")
+            {
+                var cfgRo = Config.Load();
+                if (cfgRo != null) { cfgRo.RotateDir = ""; cfgRo.Save(); }
+                Out("[OK] 轮播已停止（当前壁纸保留）");
+                return;
+            }
             if (verb == "status") { await Status().ConfigureAwait(false); return; }
             if (verb == "clear")
             {
@@ -1673,7 +2035,13 @@ internal static class Cli
                 for (int i = 2; i + 1 < args.Length; i++) { if (args[i] == "--theme") { themeArg = args[i + 1]; break; } }
                 string videoSoundArg = null;
                 for (int i = 2; i + 1 < args.Length; i++) { if (args[i] == "--video-sound") { videoSoundArg = args[i + 1]; break; } }
-                string err = await Apply(rawPath, opts, themeArg, videoSoundArg).ConfigureAwait(false);
+                string accentArg = null, glassArg = null;
+                for (int i = 2; i + 1 < args.Length; i++)
+                {
+                    if (args[i] == "--accent") accentArg = args[i + 1];
+                    if (args[i] == "--glass") glassArg = args[i + 1];
+                }
+                string err = await Apply(rawPath, opts, themeArg, videoSoundArg, null, accentArg, glassArg).ConfigureAwait(false);
                 if (err != null) { Out("[X] " + err); Environment.ExitCode = 1; }
                 return;
             }
@@ -1702,7 +2070,7 @@ internal static class Cli
     }
 
     /// <summary>核心入口：选文件→缓存→探测可用 URL→注入→存配置。GUI 与 CLI 共用。返回错误消息，null=成功。</summary>
-    public static async Task<string> Apply(string rawPath, Dictionary<string, double> opts, string themeArg = null, string videoSoundArg = null, Action<int> progress = null)
+    public static async Task<string> Apply(string rawPath, Dictionary<string, double> opts, string themeArg = null, string videoSoundArg = null, Action<int> progress = null, string accentArg = null, string glassArg = null)
     {
         string path = Util.NormalizePath(rawPath);
         if (!File.Exists(path)) return "文件不存在: " + path;
@@ -1750,6 +2118,16 @@ internal static class Cli
                 string s = videoSoundArg.Trim().ToLowerInvariant();
                 if (s == "on" || s == "true" || s == "1") cfg.VideoSound = true;
                 else if (s == "off" || s == "false" || s == "0") cfg.VideoSound = false;
+            }
+            if (accentArg != null)
+            {
+                string a = accentArg.Trim().ToLowerInvariant();
+                cfg.AccentColor = (a == "default" || a == "off") ? "" : (Util.NormalizeRgb(accentArg) ?? cfg.AccentColor);
+            }
+            if (glassArg != null)
+            {
+                string g = glassArg.Trim().ToLowerInvariant();
+                cfg.GlassColor = (g == "default" || g == "off") ? "" : (Util.NormalizeRgb(glassArg) ?? cfg.GlassColor);
             }
         }
 
@@ -1811,6 +2189,8 @@ internal static class Cli
         var targets = Injector.GetTargets();
         Config cfg = Config.Load();
         Out("配置: " + (cfg == null ? "无" : "on=" + cfg.On + " type=" + cfg.Type + " src=" + cfg.SourcePath));
+        if (cfg != null && !string.IsNullOrEmpty(cfg.RotateDir))
+            Out("轮播: " + cfg.RotateDir + " / 每 " + cfg.RotateMinutes + " 分钟 / " + cfg.RotateOrder);
         foreach (var t in targets)
         {
             string marker;
