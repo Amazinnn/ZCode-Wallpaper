@@ -5,3 +5,6 @@ app/data/
 *.zcwp.bak
 release/
 openspec/
+
+# user's personal wallpaper source media (never publish)
+"ZCode Wallpaper/"
