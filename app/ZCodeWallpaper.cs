@@ -603,6 +603,7 @@ async (cfg) => {
   document.documentElement.appendChild(overlay);
   const base = 'position:fixed;inset:0;z-index:-1;pointer-events:none;';
   W.musicAutoplay = cfg.musicAutoplay !== undefined ? cfg.musicAutoplay : true;
+  W.userPaused = false;
   if (cfg.video) {
     const v = document.createElement('video');
     v.id = 'zcode-wallpaper-video';
@@ -611,7 +612,9 @@ async (cfg) => {
     layer.setAttribute('style', base);
     layer.appendChild(v);
     W.video = v;
-    const pp = v.play(); if (pp && pp.catch) pp.catch(() => {});
+    // 跟随窗口勾选且页面隐藏时不抢播, 等 onVis 统一起播; 取消勾选(独立播放)则照常起播
+    const pp = (W.musicAutoplay && document.visibilityState !== 'visible') ? null : v.play();
+    if (pp && pp.catch) pp.catch(() => {});
   } else {
     layer.setAttribute('style', base + 'background-image:url(' + JSON.stringify(cfg.img) + ');background-position:center;background-size:cover;background-repeat:no-repeat;');
   }
@@ -624,15 +627,14 @@ async (cfg) => {
     W.audio = a;
     if (W.musicAutoplay) {
       const tryPlay = () => { const mp = a.play(); if (mp && mp.catch) mp.catch(() => {}); };
-      if (document.visibilityState === 'visible') tryPlay();
-      else setTimeout(tryPlay, 600);
+      if (document.visibilityState === 'visible') tryPlay(); // 跟随窗口: 隐藏态不抢播, 等 onVis
       setTimeout(() => { if (a.paused && W.musicAutoplay && document.visibilityState === 'visible') tryPlay(); }, 900);
     }
   }
   W.onVis = () => {
     const vis = document.visibilityState === 'visible';
-    if (W.video) { if (!vis) { try { W.video.pause(); } catch (e) {} } else { const p = W.video.play(); if (p && p.catch) p.catch(() => {}); } }
-    if (W.audio && W.musicAutoplay) { if (!vis) { try { W.audio.pause(); } catch (e) {} } else { const p = W.audio.play(); if (p && p.catch) p.catch(() => {}); } }
+    if (W.video && W.musicAutoplay) { if (!vis) { try { W.video.pause(); } catch (e) {} } else { const p = W.video.play(); if (p && p.catch) p.catch(() => {}); } }
+    if (W.audio && W.musicAutoplay) { if (!vis) { try { W.audio.pause(); } catch (e) {} } else if (!W.userPaused) { const p = W.audio.play(); if (p && p.catch) p.catch(() => {}); } }
   };
   document.addEventListener('visibilitychange', W.onVis);
   W.applyParams = (p) => {
@@ -681,7 +683,7 @@ async (cfg) => {
     return 'OK';
   };
   W.applyParams(cfg);
-  W.ver = 4; W.on = true;
+  W.ver = 5; W.on = true;
   return 'OK';
 }";
 
@@ -748,17 +750,19 @@ async (cfg) => {
         }
     }
 
-    /// <summary>音乐命令: 内联 DOM 操作（不依赖注入层版本）; src 为空=清除; playing: 1=播/0=暂停/-1=保持现状; 同步 W.audio 供 onVis 跟随</summary>
+    /// <summary>音乐命令: 内联 DOM 操作（不依赖注入层版本）; src 为空=清除; playing: 1=播/0=暂停/-1=保持现状; autoplay/userPaused 同步到页面供 onVis 门控（移出 src 分支: 纯视频壁纸无音乐文件时开关状态也要送达）</summary>
     public static async Task<string> SetMusicAsync(string targetWsUrl, string src, int playing, double volume, bool autoplay)
     {
         string expr = string.Format(System.Globalization.CultureInfo.InvariantCulture,
             "(() => {{ const W = window.__ZCWP || {{}}; let a = document.getElementById('zcode-wallpaper-audio');"
             + " const src = {0}; const vol = {1};"
+            + " W.musicAutoplay = {2};"
+            + " if ({3} === 1) W.userPaused = false; else if ({3} === 0) W.userPaused = true;"
             + " if (src) {{"
             + "   if (!a) {{ a = document.createElement('audio'); a.id = 'zcode-wallpaper-audio'; a.loop = true; document.documentElement.appendChild(a); }}"
             + "   if (a.src !== src) a.src = src;"
             + "   a.volume = vol;"
-            + "   W.audio = a; W.musicAutoplay = {2};"
+            + "   W.audio = a;"
             + "   if ({3} === 1) {{ const p = a.play(); if (p && p.catch) p.catch(() => {{}}); }} else if ({3} === 0) a.pause();"
             + "   return 'OK';"
             + " }}"
@@ -1172,15 +1176,24 @@ internal sealed class MainForm : Form
 
     private void ShowPanel()
     {
+        ReloadCfg();
+        SetSlidersFromConfig(); // 面板打开时以磁盘为准 (CLI 可能改过 config.json)
         Show();
         WindowState = FormWindowState.Normal;
         Activate();
         RefreshStatusAsync();
     }
 
+    /// <summary>从磁盘重读配置。守护常驻期间 CLI 可能直接改过 config.json，
+    /// 而 _cfg 只是启动时的内存快照 — 不重读就 Save 会把整份旧状态写回磁盘盖掉新配置。</summary>
+    private void ReloadCfg()
+    {
+        _cfg = Config.Load() ?? new Config();
+    }
+
     private void BuildTray()
     {
-        _tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "ZCode 壁纸 v1.4", Visible = true };
+        _tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "ZCode 壁纸 v1.5", Visible = true };
         var menu = new ContextMenu();
         menu.MenuItems.Add("打开面板", delegate { ShowPanel(); });
         menu.MenuItems.Add("截图检查", delegate { ShotAsync(); });
@@ -1213,21 +1226,39 @@ internal sealed class MainForm : Form
 
     private void BuildUi()
     {
-        Text = "ZCode 壁纸 v1.4";
+        Text = "ZCode 壁纸 v1.5";
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(480, 760);
+        ClientSize = new Size(480, 560);
         Font = new Font("Microsoft YaHei UI", 9F);
 
+        // 状态行所有页可见
         _status = new Label { Location = new Point(12, 10), Size = new Size(456, 22), Text = "状态: 检测中…" };
         Controls.Add(_status);
 
-        Controls.Add(new Label { Location = new Point(12, 38), Size = new Size(200, 20), Text = "图片 / 视频路径 (粘贴自动清洗):" });
-        _pathBox = new TextBox { Location = new Point(12, 60), Size = new Size(372, 23) };
+        var tabs = new TabControl { Location = new Point(8, 38), Size = new Size(464, 512) };
+        var pageFile = new TabPage("文件管理");
+        var pagePlay = new TabPage("播放设置");
+        var pageStyle = new TabPage("样式管理");
+        tabs.TabPages.Add(pageFile);
+        tabs.TabPages.Add(pagePlay);
+        tabs.TabPages.Add(pageStyle);
+        Controls.Add(tabs);
+
+        BuildFileUi(pageFile);
+        BuildPlaybackUi(pagePlay);
+        BuildStyleUi(pageStyle);
+        SetSlidersFromConfig();
+    }
+
+    private void BuildFileUi(TabPage page)
+    {
+        page.Controls.Add(new Label { Location = new Point(12, 12), Size = new Size(320, 20), Text = "图片 / 视频路径 (粘贴自动清洗):" });
+        _pathBox = new TextBox { Location = new Point(12, 36), Size = new Size(358, 23) };
         _pathBox.Leave += delegate { _pathBox.Text = Util.NormalizePath(_pathBox.Text); };
-        Controls.Add(_pathBox);
-        var browse = new Button { Location = new Point(392, 59), Size = new Size(76, 25), Text = "浏览…" };
+        page.Controls.Add(_pathBox);
+        var browse = new Button { Location = new Point(376, 35), Size = new Size(68, 25), Text = "浏览…" };
         browse.Click += delegate
         {
             using (var dlg = new OpenFileDialog())
@@ -1236,112 +1267,22 @@ internal sealed class MainForm : Form
                 if (dlg.ShowDialog(this) == DialogResult.OK) _pathBox.Text = dlg.FileName;
             }
         };
-        Controls.Add(browse);
+        page.Controls.Add(browse);
 
-        var apply = new Button { Location = new Point(12, 92), Size = new Size(146, 30), Text = "应用壁纸" };
+        var apply = new Button { Location = new Point(12, 68), Size = new Size(142, 30), Text = "应用壁纸" };
         apply.Click += delegate { ApplyAsync(); };
-        Controls.Add(apply);
-        var clear = new Button { Location = new Point(166, 92), Size = new Size(146, 30), Text = "清除壁纸" };
+        page.Controls.Add(apply);
+        var clear = new Button { Location = new Point(160, 68), Size = new Size(142, 30), Text = "清除壁纸" };
         clear.Click += delegate { ClearAsync(); };
-        Controls.Add(clear);
-        var shot = new Button { Location = new Point(320, 92), Size = new Size(148, 30), Text = "截图检查" };
+        page.Controls.Add(clear);
+        var shot = new Button { Location = new Point(308, 68), Size = new Size(136, 30), Text = "截图检查" };
         shot.Click += delegate { ShotAsync(); };
-        Controls.Add(shot);
+        page.Controls.Add(shot);
 
-        Controls.Add(new Label { Location = new Point(12, 128), Size = new Size(50, 20), Text = "主题:" });
-        _themeCombo = new ComboBox { Location = new Point(62, 125), Size = new Size(240, 24), DropDownStyle = ComboBoxStyle.DropDownList };
-        _themeCombo.Items.AddRange(new object[] { "默认（分层玻璃）", "夜光琥珀 Nocturne", "清透玻璃 Quiet" });
-        _themeCombo.SelectedIndexChanged += delegate
-        {
-            if (_loadingSliders) return;
-            _cfg.Theme = _themeCombo.SelectedIndex == 1 ? "nocturne" : (_themeCombo.SelectedIndex == 2 ? "glassy" : "default");
-            _cfg.Save();
-            LiveUpdateAsync();
-        };
-        Controls.Add(_themeCombo);
-
-        Controls.Add(new Label { Location = new Point(12, 152), Size = new Size(456, 18), ForeColor = Color.DimGray, Text = "滑块拖动即时生效于 ZCode（无需确认），松手后自动保存" });
-
-        int y = 176;
-        _opacity = MakeSlider(ref y, "不透明度", 0, 100, ref _opacityV);
-        _brightness = MakeSlider(ref y, "亮度", 30, 180, ref _brightnessV);
-        _saturation = MakeSlider(ref y, "饱和度", 0, 200, ref _saturationV);
-        _contrast = MakeSlider(ref y, "对比度", 50, 150, ref _contrastV);
-        _overlay = MakeSlider(ref y, "遮罩压暗", 0, 80, ref _overlayV);
-        _blur = MakeSlider(ref y, "模糊 px", 0, 20, ref _blurV);
-        _panelOpacity = MakeSlider(ref y, "面板玻璃", 0, 100, ref _panelOpacityV);
-        _panelBlur = MakeSlider(ref y, "毛玻璃 px", 0, 30, ref _panelBlurV);
-        BuildMusicUi();
-        BuildRotateUi();
-        BuildCustomUi();
-        SetSlidersFromConfig();
-    }
-
-    private void BuildMusicUi()
-    {
-        Controls.Add(new Label { Location = new Point(12, 556), Size = new Size(60, 20), Text = "音乐文件:" });
-        _musicPathBox = new TextBox { Location = new Point(76, 553), Size = new Size(290, 23), ReadOnly = true };
-        _musicPathBox.Leave += delegate { _musicPathBox.Text = Util.NormalizePath(_musicPathBox.Text); };
-        Controls.Add(_musicPathBox);
-        var musicBrowse = new Button { Location = new Point(374, 552), Size = new Size(94, 25), Text = "浏览…" };
-        musicBrowse.Click += delegate
-        {
-            using (var dlg = new OpenFileDialog())
-            {
-                dlg.Filter = "音频|*.mp3;*.wav;*.ogg;*.m4a;*.flac|所有文件|*.*";
-                if (dlg.ShowDialog(this) == DialogResult.OK) SetMusicFile(dlg.FileName);
-            }
-        };
-        Controls.Add(musicBrowse);
-
-        _musicPlayBtn = new Button { Location = new Point(12, 588), Size = new Size(110, 28), Text = "▶ 播放" };
-        _musicPlayBtn.Click += delegate { ToggleMusic(); };
-        Controls.Add(_musicPlayBtn);
-        _musicClearBtn = new Button { Location = new Point(130, 588), Size = new Size(90, 28), Text = "清除" };
-        _musicClearBtn.Click += delegate { ClearMusic(); };
-        Controls.Add(_musicClearBtn);
-        Controls.Add(new Label { Location = new Point(228, 594), Size = new Size(40, 20), Text = "音量" });
-        _musicVolumeBar = new TrackBar { Location = new Point(268, 588), Size = new Size(120, 32), Minimum = 0, Maximum = 100, TickFrequency = 20 };
-        _musicVolumeV = new Label { Location = new Point(396, 594), Size = new Size(50, 20), Text = "" };
-        _musicVolumeBar.ValueChanged += delegate
-        {
-            if (_loadingSliders) return;
-            _musicVolumeV.Text = _musicVolumeBar.Value.ToString();
-            _cfg.MusicVolume = _musicVolumeBar.Value / 100.0;
-            _cfg.Save();
-            _throttle.Stop();
-            _throttle.Start();
-        };
-        Controls.Add(_musicVolumeBar);
-        Controls.Add(_musicVolumeV);
-        _musicFollowChk = new CheckBox { Location = new Point(12, 622), Size = new Size(200, 22), Text = "跟随窗口（最小化暂停）" };
-        _musicFollowChk.CheckedChanged += delegate
-        {
-            if (_loadingSliders) return;
-            _cfg.MusicAutoplay = _musicFollowChk.Checked;
-            _cfg.Save();
-            LiveMusicAsync(-1); // 只同步 autoplay 语义, 不改变播放状态
-        };
-        Controls.Add(_musicFollowChk);
-        _videoSoundChk = new CheckBox { Location = new Point(220, 622), Size = new Size(150, 22), Text = "视频自带声音" };
-        _videoSoundChk.CheckedChanged += delegate
-        {
-            if (_loadingSliders) return;
-            _cfg.VideoSound = _videoSoundChk.Checked;
-            _cfg.Save();
-            if (_cfg.VideoSound) { _musicPlaying = false; _musicPlayBtn.Text = "▶ 播放"; LiveMusicAsync(0); } // 互斥: 选视频声则暂停音乐
-            _throttle.Stop();
-            _throttle.Start();
-        };
-        Controls.Add(_videoSoundChk);
-    }
-
-    private void BuildRotateUi()
-    {
-        Controls.Add(new Label { Location = new Point(12, 662), Size = new Size(76, 20), Text = "轮播文件夹:" });
-        _rotatePathBox = new TextBox { Location = new Point(88, 659), Size = new Size(210, 23), ReadOnly = true };
-        Controls.Add(_rotatePathBox);
-        var rotBrowse = new Button { Location = new Point(304, 658), Size = new Size(70, 25), Text = "浏览…" };
+        page.Controls.Add(new Label { Location = new Point(12, 114), Size = new Size(76, 20), Text = "轮播文件夹:" });
+        _rotatePathBox = new TextBox { Location = new Point(88, 111), Size = new Size(196, 23), ReadOnly = true };
+        page.Controls.Add(_rotatePathBox);
+        var rotBrowse = new Button { Location = new Point(290, 110), Size = new Size(68, 25), Text = "浏览…" };
         rotBrowse.Click += delegate
         {
             using (var dlg = new FolderBrowserDialog())
@@ -1350,46 +1291,135 @@ internal sealed class MainForm : Form
                 if (dlg.ShowDialog(this) == DialogResult.OK) SetRotateFolder(dlg.SelectedPath);
             }
         };
-        Controls.Add(rotBrowse);
-        var rotStop = new Button { Location = new Point(380, 658), Size = new Size(88, 25), Text = "停止轮播" };
+        page.Controls.Add(rotBrowse);
+        var rotStop = new Button { Location = new Point(364, 110), Size = new Size(80, 25), Text = "停止轮播" };
         rotStop.Click += delegate { StopRotate(); };
-        Controls.Add(rotStop);
+        page.Controls.Add(rotStop);
 
-        Controls.Add(new Label { Location = new Point(12, 694), Size = new Size(40, 20), Text = "间隔" });
-        _rotateIntervalCombo = new ComboBox { Location = new Point(52, 691), Size = new Size(90, 24), DropDownStyle = ComboBoxStyle.DropDownList };
+        page.Controls.Add(new Label { Location = new Point(12, 148), Size = new Size(60, 20), Text = "音乐文件:" });
+        _musicPathBox = new TextBox { Location = new Point(72, 145), Size = new Size(290, 23), ReadOnly = true };
+        _musicPathBox.Leave += delegate { _musicPathBox.Text = Util.NormalizePath(_musicPathBox.Text); };
+        page.Controls.Add(_musicPathBox);
+        var musicBrowse = new Button { Location = new Point(368, 144), Size = new Size(76, 25), Text = "浏览…" };
+        musicBrowse.Click += delegate
+        {
+            using (var dlg = new OpenFileDialog())
+            {
+                dlg.Filter = "音频|*.mp3;*.wav;*.ogg;*.m4a;*.flac|所有文件|*.*";
+                if (dlg.ShowDialog(this) == DialogResult.OK) SetMusicFile(dlg.FileName);
+            }
+        };
+        page.Controls.Add(musicBrowse);
+        page.Controls.Add(new Label { Location = new Point(12, 180), Size = new Size(420, 18), ForeColor = Color.DimGray, Text = "播放/音量/跟随窗口/轮播间隔顺序 →「播放设置」页" });
+    }
+
+    private void BuildPlaybackUi(TabPage page)
+    {
+        _musicPlayBtn = new Button { Location = new Point(12, 12), Size = new Size(110, 28), Text = "▶ 播放" };
+        _musicPlayBtn.Click += delegate { ToggleMusic(); };
+        page.Controls.Add(_musicPlayBtn);
+        _musicClearBtn = new Button { Location = new Point(130, 12), Size = new Size(90, 28), Text = "清除" };
+        _musicClearBtn.Click += delegate { ClearMusic(); };
+        page.Controls.Add(_musicClearBtn);
+        page.Controls.Add(new Label { Location = new Point(232, 18), Size = new Size(40, 20), Text = "音量" });
+        _musicVolumeBar = new TrackBar { Location = new Point(272, 10), Size = new Size(120, 32), Minimum = 0, Maximum = 100, TickFrequency = 20 };
+        _musicVolumeV = new Label { Location = new Point(398, 18), Size = new Size(44, 20), Text = "" };
+        _musicVolumeBar.ValueChanged += delegate
+        {
+            if (_loadingSliders) return;
+            _musicVolumeV.Text = _musicVolumeBar.Value.ToString();
+            ReloadCfg();
+            _cfg.MusicVolume = _musicVolumeBar.Value / 100.0;
+            _cfg.Save();
+            _throttle.Stop();
+            _throttle.Start();
+        };
+        page.Controls.Add(_musicVolumeBar);
+        page.Controls.Add(_musicVolumeV);
+        _musicFollowChk = new CheckBox { Location = new Point(12, 52), Size = new Size(260, 22), Text = "跟随窗口（最小化暂停播放）" };
+        _musicFollowChk.CheckedChanged += delegate
+        {
+            if (_loadingSliders) return;
+            ReloadCfg();
+            _cfg.MusicAutoplay = _musicFollowChk.Checked;
+            _cfg.Save();
+            LiveMusicAsync(-1); // 只同步跟随语义, 不改变播放状态
+        };
+        page.Controls.Add(_musicFollowChk);
+        _videoSoundChk = new CheckBox { Location = new Point(12, 80), Size = new Size(150, 22), Text = "视频自带声音" };
+        _videoSoundChk.CheckedChanged += delegate
+        {
+            if (_loadingSliders) return;
+            ReloadCfg();
+            _cfg.VideoSound = _videoSoundChk.Checked;
+            _cfg.Save();
+            if (_cfg.VideoSound) { _musicPlaying = false; _musicPlayBtn.Text = "▶ 播放"; LiveMusicAsync(0); } // 互斥: 选视频声则暂停音乐
+            _throttle.Stop();
+            _throttle.Start();
+        };
+        page.Controls.Add(_videoSoundChk);
+
+        page.Controls.Add(new Label { Location = new Point(12, 118), Size = new Size(64, 20), Text = "轮播间隔" });
+        _rotateIntervalCombo = new ComboBox { Location = new Point(80, 115), Size = new Size(110, 24), DropDownStyle = ComboBoxStyle.DropDownList };
         _rotateIntervalCombo.Items.AddRange(new object[] { "1 分钟", "5 分钟", "15 分钟", "30 分钟", "60 分钟" });
         _rotateIntervalCombo.SelectedIndexChanged += delegate
         {
             if (_loadingSliders) return;
             int[] mins = { 1, 5, 15, 30, 60 };
-            if (_rotateIntervalCombo.SelectedIndex >= 0) { _cfg.RotateMinutes = mins[_rotateIntervalCombo.SelectedIndex]; _cfg.Save(); }
+            if (_rotateIntervalCombo.SelectedIndex >= 0) { ReloadCfg(); _cfg.RotateMinutes = mins[_rotateIntervalCombo.SelectedIndex]; _cfg.Save(); }
         };
-        Controls.Add(_rotateIntervalCombo);
-        Controls.Add(new Label { Location = new Point(160, 694), Size = new Size(40, 20), Text = "顺序" });
-        _rotateOrderCombo = new ComboBox { Location = new Point(200, 691), Size = new Size(90, 24), DropDownStyle = ComboBoxStyle.DropDownList };
+        page.Controls.Add(_rotateIntervalCombo);
+        page.Controls.Add(new Label { Location = new Point(210, 118), Size = new Size(40, 20), Text = "顺序" });
+        _rotateOrderCombo = new ComboBox { Location = new Point(252, 115), Size = new Size(110, 24), DropDownStyle = ComboBoxStyle.DropDownList };
         _rotateOrderCombo.Items.AddRange(new object[] { "顺序", "随机" });
         _rotateOrderCombo.SelectedIndexChanged += delegate
         {
             if (_loadingSliders) return;
+            ReloadCfg();
             _cfg.RotateOrder = _rotateOrderCombo.SelectedIndex == 1 ? "random" : "seq";
             _cfg.Save();
         };
-        Controls.Add(_rotateOrderCombo);
+        page.Controls.Add(_rotateOrderCombo);
+        page.Controls.Add(new Label { Location = new Point(12, 150), Size = new Size(430, 18), ForeColor = Color.DimGray, Text = "取消勾选「跟随窗口」后，最小化 ZCode 音乐/视频将继续播放" });
     }
 
-    private void BuildCustomUi()
+    private void BuildStyleUi(TabPage page)
     {
-        Controls.Add(new Label { Location = new Point(12, 728), Size = new Size(56, 20), Text = "强调色" });
-        _accentBtn = new Button { Location = new Point(68, 724), Size = new Size(90, 26), Text = "选择…" };
+        page.Controls.Add(new Label { Location = new Point(12, 14), Size = new Size(50, 20), Text = "主题:" });
+        _themeCombo = new ComboBox { Location = new Point(62, 11), Size = new Size(240, 24), DropDownStyle = ComboBoxStyle.DropDownList };
+        _themeCombo.Items.AddRange(new object[] { "默认（分层玻璃）", "夜光琥珀 Nocturne", "清透玻璃 Quiet" });
+        _themeCombo.SelectedIndexChanged += delegate
+        {
+            if (_loadingSliders) return;
+            ReloadCfg();
+            _cfg.Theme = _themeCombo.SelectedIndex == 1 ? "nocturne" : (_themeCombo.SelectedIndex == 2 ? "glassy" : "default");
+            _cfg.Save();
+            LiveUpdateAsync();
+        };
+        page.Controls.Add(_themeCombo);
+        page.Controls.Add(new Label { Location = new Point(12, 40), Size = new Size(432, 18), ForeColor = Color.DimGray, Text = "滑块拖动即时生效于 ZCode（无需确认），松手后自动保存" });
+
+        int y = 64;
+        _opacity = MakeSlider(page, ref y, "不透明度", 0, 100, ref _opacityV);
+        _brightness = MakeSlider(page, ref y, "亮度", 30, 180, ref _brightnessV);
+        _saturation = MakeSlider(page, ref y, "饱和度", 0, 200, ref _saturationV);
+        _contrast = MakeSlider(page, ref y, "对比度", 50, 150, ref _contrastV);
+        _overlay = MakeSlider(page, ref y, "遮罩压暗", 0, 80, ref _overlayV);
+        _blur = MakeSlider(page, ref y, "模糊 px", 0, 20, ref _blurV);
+        _panelOpacity = MakeSlider(page, ref y, "面板玻璃", 0, 100, ref _panelOpacityV);
+        _panelBlur = MakeSlider(page, ref y, "毛玻璃 px", 0, 30, ref _panelBlurV);
+
+        page.Controls.Add(new Label { Location = new Point(12, 444), Size = new Size(56, 20), Text = "强调色" });
+        _accentBtn = new Button { Location = new Point(68, 440), Size = new Size(90, 26), Text = "选择…" };
         _accentBtn.Click += delegate { PickColor("accent"); };
-        Controls.Add(_accentBtn);
-        Controls.Add(new Label { Location = new Point(180, 728), Size = new Size(56, 20), Text = "玻璃色" });
-        _glassBtn = new Button { Location = new Point(236, 724), Size = new Size(90, 26), Text = "选择…" };
+        page.Controls.Add(_accentBtn);
+        page.Controls.Add(new Label { Location = new Point(180, 444), Size = new Size(56, 20), Text = "玻璃色" });
+        _glassBtn = new Button { Location = new Point(236, 440), Size = new Size(90, 26), Text = "选择…" };
         _glassBtn.Click += delegate { PickColor("glass"); };
-        Controls.Add(_glassBtn);
-        var resetBtn = new Button { Location = new Point(344, 724), Size = new Size(124, 26), Text = "恢复默认配色" };
+        page.Controls.Add(_glassBtn);
+        var resetBtn = new Button { Location = new Point(340, 440), Size = new Size(104, 26), Text = "恢复默认配色" };
         resetBtn.Click += delegate { ResetColors(); };
-        Controls.Add(resetBtn);
+        page.Controls.Add(resetBtn);
     }
 
     private async void SetRotateFolder(string rawPath)
@@ -1398,6 +1428,7 @@ internal sealed class MainForm : Form
         if (!Directory.Exists(path)) { SetStatus("[X] 目录不存在: " + path); return; }
         var imgs = Watch.ListRotateImages(path);
         if (imgs.Count == 0) { SetStatus("[X] 目录里没有可用图片 (png/jpg/jpeg/webp/gif, ≤30MiB)"); return; }
+        ReloadCfg();
         _cfg.RotateDir = path;
         _cfg.Save();
         _rotatePathBox.Text = path;
@@ -1407,6 +1438,7 @@ internal sealed class MainForm : Form
 
     private void StopRotate()
     {
+        ReloadCfg();
         _cfg.RotateDir = "";
         _cfg.Save();
         _rotatePathBox.Text = "";
@@ -1419,6 +1451,7 @@ internal sealed class MainForm : Form
         {
             if (dlg.ShowDialog(this) != DialogResult.OK) return;
             string rgb = dlg.Color.R + "," + dlg.Color.G + "," + dlg.Color.B;
+            ReloadCfg();
             if (which == "accent") _cfg.AccentColor = rgb; else _cfg.GlassColor = rgb;
             _cfg.Save();
             UpdateColorButtons();
@@ -1429,6 +1462,7 @@ internal sealed class MainForm : Form
 
     private void ResetColors()
     {
+        ReloadCfg();
         _cfg.AccentColor = "";
         _cfg.GlassColor = "";
         _cfg.Save();
@@ -1471,6 +1505,7 @@ internal sealed class MainForm : Form
         {
             string cached = Path.Combine(Program.DataDir, "music" + Path.GetExtension(path));
             File.Copy(path, cached, true);
+            ReloadCfg();
             _cfg.MusicPath = path;
             _cfg.MusicVolume = _musicVolumeBar.Value / 100.0;
             _cfg.VideoSound = false; // 互斥: 用音乐则关视频声音
@@ -1494,6 +1529,7 @@ internal sealed class MainForm : Form
         _musicPlayBtn.Text = _musicPlaying ? "⏸ 暂停" : "▶ 播放";
         if (_musicPlaying)
         {
+            ReloadCfg();
             _cfg.VideoSound = false; // 互斥: 播放音乐则关视频声音
             _loadingSliders = true;
             _videoSoundChk.Checked = false;
@@ -1505,6 +1541,7 @@ internal sealed class MainForm : Form
 
     private void ClearMusic()
     {
+        ReloadCfg();
         _cfg.MusicPath = "";
         _cfg.Save();
         _musicPathBox.Text = "";
@@ -1529,9 +1566,9 @@ internal sealed class MainForm : Form
         catch (Exception ex) { SetStatus("音乐控制失败: " + ex.Message); }
     }
 
-    private TrackBar MakeSlider(ref int y, string name, int min, int max, ref Label valueLabel)
+    private TrackBar MakeSlider(Control host, ref int y, string name, int min, int max, ref Label valueLabel)
     {
-        Controls.Add(new Label { Location = new Point(12, y + 4), Size = new Size(76, 20), Text = name });
+        host.Controls.Add(new Label { Location = new Point(12, y + 4), Size = new Size(76, 20), Text = name });
         var bar = new TrackBar
         {
             Location = new Point(90, y),
@@ -1548,12 +1585,13 @@ internal sealed class MainForm : Form
         {
             if (_loadingSliders) return;
             vl.Text = bar.Value.ToString();
+            ReloadCfg();
             SyncSlidersToConfig();
             _throttle.Stop();
             _throttle.Start();
         };
-        Controls.Add(bar);
-        Controls.Add(vl);
+        host.Controls.Add(bar);
+        host.Controls.Add(vl);
         y += 46;
         return bar;
     }
@@ -1639,6 +1677,7 @@ internal sealed class MainForm : Form
     private async void ApplyAsync()
     {
         _pathBox.Text = Util.NormalizePath(_pathBox.Text);
+        ReloadCfg();
         SyncSlidersToConfig();
         _cfg.Save();
         SetStatus("应用中…");
@@ -1961,9 +2000,10 @@ internal static class Cli
             {
                 var cfgX = Config.Load();
                 if (cfgX != null) { cfgX.MusicPath = ""; cfgX.Save(); }
+                bool follow = cfgX != null ? cfgX.MusicAutoplay : true;
                 foreach (var t in Injector.GetTargets())
                 {
-                    try { await Injector.SetMusicAsync(t.WsUrl, null, 0, 0, true).ConfigureAwait(false); } catch { }
+                    try { await Injector.SetMusicAsync(t.WsUrl, null, 0, 0, follow).ConfigureAwait(false); } catch { }
                 }
                 Out("[OK] 音乐已清除");
                 return;
@@ -2028,20 +2068,21 @@ internal static class Cli
             }
             if (verb == "apply")
             {
-                if (args.Length < 2) { Out("用法: ZCodeWallpaper.exe apply <图片或视频路径> [--opacity 55] [--brightness 100] [--saturation 100] [--contrast 100] [--overlay 30] [--blur 0]"); return; }
+                if (args.Length < 2) { Out("用法: ZCodeWallpaper.exe apply <图片或视频路径> [--opacity 55] [--brightness 100] [--saturation 100] [--contrast 100] [--overlay 30] [--blur 0] [--music-follow on|off]"); return; }
                 string rawPath = args[1];
                 var opts = ParseOpts(args, 2);
                 string themeArg = null;
                 for (int i = 2; i + 1 < args.Length; i++) { if (args[i] == "--theme") { themeArg = args[i + 1]; break; } }
                 string videoSoundArg = null;
                 for (int i = 2; i + 1 < args.Length; i++) { if (args[i] == "--video-sound") { videoSoundArg = args[i + 1]; break; } }
-                string accentArg = null, glassArg = null;
+                string accentArg = null, glassArg = null, musicFollowArg = null;
                 for (int i = 2; i + 1 < args.Length; i++)
                 {
                     if (args[i] == "--accent") accentArg = args[i + 1];
                     if (args[i] == "--glass") glassArg = args[i + 1];
+                    if (args[i] == "--music-follow") musicFollowArg = args[i + 1];
                 }
-                string err = await Apply(rawPath, opts, themeArg, videoSoundArg, null, accentArg, glassArg).ConfigureAwait(false);
+                string err = await Apply(rawPath, opts, themeArg, videoSoundArg, null, accentArg, glassArg, musicFollowArg).ConfigureAwait(false);
                 if (err != null) { Out("[X] " + err); Environment.ExitCode = 1; }
                 return;
             }
@@ -2070,7 +2111,7 @@ internal static class Cli
     }
 
     /// <summary>核心入口：选文件→缓存→探测可用 URL→注入→存配置。GUI 与 CLI 共用。返回错误消息，null=成功。</summary>
-    public static async Task<string> Apply(string rawPath, Dictionary<string, double> opts, string themeArg = null, string videoSoundArg = null, Action<int> progress = null, string accentArg = null, string glassArg = null)
+    public static async Task<string> Apply(string rawPath, Dictionary<string, double> opts, string themeArg = null, string videoSoundArg = null, Action<int> progress = null, string accentArg = null, string glassArg = null, string musicFollowArg = null)
     {
         string path = Util.NormalizePath(rawPath);
         if (!File.Exists(path)) return "文件不存在: " + path;
@@ -2118,6 +2159,12 @@ internal static class Cli
                 string s = videoSoundArg.Trim().ToLowerInvariant();
                 if (s == "on" || s == "true" || s == "1") cfg.VideoSound = true;
                 else if (s == "off" || s == "false" || s == "0") cfg.VideoSound = false;
+            }
+            if (!string.IsNullOrEmpty(musicFollowArg))
+            {
+                string s = musicFollowArg.Trim().ToLowerInvariant();
+                if (s == "on" || s == "true" || s == "1") cfg.MusicAutoplay = true;
+                else if (s == "off" || s == "false" || s == "0") cfg.MusicAutoplay = false;
             }
             if (accentArg != null)
             {
@@ -2189,6 +2236,8 @@ internal static class Cli
         var targets = Injector.GetTargets();
         Config cfg = Config.Load();
         Out("配置: " + (cfg == null ? "无" : "on=" + cfg.On + " type=" + cfg.Type + " src=" + cfg.SourcePath));
+        if (cfg != null)
+            Out("跟随窗口: " + (cfg.MusicAutoplay ? "开（最小化暂停播放）" : "关（独立播放）"));
         if (cfg != null && !string.IsNullOrEmpty(cfg.RotateDir))
             Out("轮播: " + cfg.RotateDir + " / 每 " + cfg.RotateMinutes + " 分钟 / " + cfg.RotateOrder);
         foreach (var t in targets)
