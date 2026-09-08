@@ -579,7 +579,7 @@ async (cfg) => {
     for (const id of ['zcode-wallpaper-audio']) {
       const el = document.getElementById(id); if (el) { try { el.pause(); } catch (e) {} el.remove(); }
     }
-    if (W.onVis) { document.removeEventListener('visibilitychange', W.onVis); W.onVis = null; }
+    if (W.onVis) { document.removeEventListener('visibilitychange', W.onVis); window.removeEventListener('focus', W.onVis); window.removeEventListener('blur', W.onVis); W.onVis = null; }
     if (W.sheet) {
       const i = document.adoptedStyleSheets.indexOf(W.sheet);
       if (i >= 0) { const c = [...document.adoptedStyleSheets]; c.splice(i, 1); document.adoptedStyleSheets = c; }
@@ -607,13 +607,13 @@ async (cfg) => {
   if (cfg.video) {
     const v = document.createElement('video');
     v.id = 'zcode-wallpaper-video';
-    v.src = cfg.img; v.autoplay = true; v.loop = true; v.muted = !cfg.videoSound; v.playsInline = true;
+    v.src = cfg.img; v.loop = true; v.muted = !cfg.videoSound; v.playsInline = true; // 无 autoplay 属性: 起播完全由 JS 门控(onVis/初始 gate), 否则浏览器绕过焦点门控
     v.setAttribute('style', 'width:100%;height:100%;object-fit:cover;display:block;');
     layer.setAttribute('style', base);
     layer.appendChild(v);
     W.video = v;
-    // 跟随窗口勾选且页面隐藏时不抢播, 等 onVis 统一起播; 取消勾选(独立播放)则照常起播
-    const pp = (W.musicAutoplay && document.visibilityState !== 'visible') ? null : v.play();
+    // 跟随窗口勾选且页面非活跃(隐藏或失焦)时不抢播, 等 onVis 统一起播; 取消勾选(独立播放)则照常起播
+    const pp = (W.musicAutoplay && !(document.visibilityState === 'visible' && document.hasFocus())) ? null : v.play();
     if (pp && pp.catch) pp.catch(() => {});
   } else {
     layer.setAttribute('style', base + 'background-image:url(' + JSON.stringify(cfg.img) + ');background-position:center;background-size:cover;background-repeat:no-repeat;');
@@ -627,16 +627,19 @@ async (cfg) => {
     W.audio = a;
     if (W.musicAutoplay) {
       const tryPlay = () => { const mp = a.play(); if (mp && mp.catch) mp.catch(() => {}); };
-      if (document.visibilityState === 'visible') tryPlay(); // 跟随窗口: 隐藏态不抢播, 等 onVis
-      setTimeout(() => { if (a.paused && W.musicAutoplay && document.visibilityState === 'visible') tryPlay(); }, 900);
+      if (document.visibilityState === 'visible' && document.hasFocus()) tryPlay(); // 跟随窗口: 非活跃(隐藏/失焦)不抢播, 等 onVis
+      setTimeout(() => { if (a.paused && W.musicAutoplay && document.visibilityState === 'visible' && document.hasFocus()) tryPlay(); }, 900);
     }
   }
+  // v1.5.1: active = 可见且有焦点 — 失焦(切到别的窗口)与最小化/隐藏都算「不在前台」, 跟随窗口开时统一暂停
   W.onVis = () => {
-    const vis = document.visibilityState === 'visible';
-    if (W.video && W.musicAutoplay) { if (!vis) { try { W.video.pause(); } catch (e) {} } else { const p = W.video.play(); if (p && p.catch) p.catch(() => {}); } }
-    if (W.audio && W.musicAutoplay) { if (!vis) { try { W.audio.pause(); } catch (e) {} } else if (!W.userPaused) { const p = W.audio.play(); if (p && p.catch) p.catch(() => {}); } }
+    const act = document.visibilityState === 'visible' && document.hasFocus();
+    if (W.video && W.musicAutoplay) { if (!act) { try { W.video.pause(); } catch (e) {} } else { const p = W.video.play(); if (p && p.catch) p.catch(() => {}); } }
+    if (W.audio && W.musicAutoplay) { if (!act) { try { W.audio.pause(); } catch (e) {} } else if (!W.userPaused) { const p = W.audio.play(); if (p && p.catch) p.catch(() => {}); } }
   };
   document.addEventListener('visibilitychange', W.onVis);
+  window.addEventListener('focus', W.onVis);
+  window.addEventListener('blur', W.onVis);
   W.applyParams = (p) => {
     const l = document.getElementById('zcode-wallpaper-layer');
     const o = document.getElementById('zcode-wallpaper-overlay');
@@ -683,7 +686,7 @@ async (cfg) => {
     return 'OK';
   };
   W.applyParams(cfg);
-  W.ver = 5; W.on = true;
+  W.ver = 6; W.on = true;
   return 'OK';
 }";
 
@@ -1193,7 +1196,7 @@ internal sealed class MainForm : Form
 
     private void BuildTray()
     {
-        _tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "ZCode 壁纸 v1.5", Visible = true };
+        _tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "ZCode 壁纸 v1.5.1", Visible = true };
         var menu = new ContextMenu();
         menu.MenuItems.Add("打开面板", delegate { ShowPanel(); });
         menu.MenuItems.Add("截图检查", delegate { ShotAsync(); });
@@ -1226,7 +1229,7 @@ internal sealed class MainForm : Form
 
     private void BuildUi()
     {
-        Text = "ZCode 壁纸 v1.5";
+        Text = "ZCode 壁纸 v1.5.1";
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -1354,6 +1357,7 @@ internal sealed class MainForm : Form
             _cfg.VideoSound = _videoSoundChk.Checked;
             _cfg.Save();
             if (_cfg.VideoSound) { _musicPlaying = false; _musicPlayBtn.Text = "▶ 播放"; LiveMusicAsync(0); } // 互斥: 选视频声则暂停音乐
+            LiveUpdateAsync(); // 两个方向都立即推送 muted 状态, 不等 120ms 节流 (坑 21)
             _throttle.Stop();
             _throttle.Start();
         };
@@ -1513,6 +1517,7 @@ internal sealed class MainForm : Form
             _videoSoundChk.Checked = false;
             _loadingSliders = false;
             _cfg.Save();
+            LiveUpdateAsync(); // 互斥推送: video.muted 同步, 不只落盘 (坑 21)
             _musicPathBox.Text = path;
             _musicPlaying = true;
             _musicPlayBtn.Text = "⏸ 暂停";
@@ -1535,6 +1540,7 @@ internal sealed class MainForm : Form
             _videoSoundChk.Checked = false;
             _loadingSliders = false;
             _cfg.Save();
+            LiveUpdateAsync(); // 互斥必须推送: 只落盘的话页面 video.muted 不变, 视频音轨继续响 (坑 21)
         }
         await LiveMusicAsync(_musicPlaying ? 1 : 0);
     }
