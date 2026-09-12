@@ -173,6 +173,142 @@ internal static class MiniJson
     }
 }
 
+// ============================ ZCode 屏幕可见性 ============================
+internal static class WindowVisibility
+{
+    private const int GWL_EXSTYLE = -20;
+    private const int WS_EX_TRANSPARENT = 0x20;
+    private const int WS_EX_LAYERED = 0x80000;
+    private const uint LWA_ALPHA = 0x2;
+    private const uint DESKTOP_SWITCHDESKTOP = 0x0100;
+    private const int DWMWA_CLOAKED = 14;
+
+    [StructLayout(LayoutKind.Sequential)] private struct NativeRect { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X, Y; }
+    private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hwnd);
+    [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr hwnd, out NativeRect rect);
+    [DllImport("user32.dll")] private static extern bool ClientToScreen(IntPtr hwnd, ref NativePoint point);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rect);
+    [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr hwnd, int index);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+    [DllImport("user32.dll")] private static extern bool GetLayeredWindowAttributes(IntPtr hwnd, out uint colorKey, out byte alpha, out uint flags);
+    [DllImport("user32.dll")] private static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint desiredAccess);
+    [DllImport("user32.dll")] private static extern bool SwitchDesktop(IntPtr desktop);
+    [DllImport("user32.dll")] private static extern bool CloseDesktop(IntPtr desktop);
+    [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")] private static extern int DwmGetWindowAttributeInt(IntPtr hwnd, int attribute, out int value, int size);
+
+    /// <summary>目标客户区经屏幕裁剪并扣除遮挡矩形后的可见比例。</summary>
+    internal static double VisibleRatio(Rectangle target, Rectangle[] screens, Rectangle[] occluders)
+    {
+        long total = (long)target.Width * target.Height;
+        if (total <= 0) return 0;
+        using (var visible = new Region())
+        {
+            visible.MakeEmpty();
+            if (screens != null) foreach (var screen in screens) visible.Union(Rectangle.Intersect(target, screen));
+            if (occluders != null) foreach (var rect in occluders) visible.Exclude(rect);
+            double area = 0;
+            using (var matrix = new System.Drawing.Drawing2D.Matrix())
+                foreach (var rect in visible.GetRegionScans(matrix)) area += rect.Width * rect.Height;
+            return area / total;
+        }
+    }
+
+    internal static bool IsZCodeVisible()
+    {
+        if (!InteractiveDesktop()) return false;
+        IntPtr target = FindZCodeWindow();
+        if (target == IntPtr.Zero || !IsWindowVisible(target) || IsIconic(target) || IsCloaked(target)) return false;
+        Rectangle client;
+        if (!TryClientRect(target, out client)) return false;
+        uint targetProcessId;
+        GetWindowThreadProcessId(target, out targetProcessId);
+        var occluders = new List<Rectangle>();
+        EnumWindows(delegate(IntPtr hwnd, IntPtr unused)
+        {
+            if (hwnd == target) return false; // EnumWindows 按 Z 序；后续窗口都在 ZCode 下方。
+            if (!IsOccluder(hwnd, targetProcessId)) return true;
+            Rectangle rect;
+            if (TryWindowRect(hwnd, out rect)) occluders.Add(rect);
+            return true;
+        }, IntPtr.Zero);
+        var screens = new List<Rectangle>();
+        foreach (var screen in Screen.AllScreens) screens.Add(screen.Bounds);
+        return VisibleRatio(client, screens.ToArray(), occluders.ToArray()) >= 0.10;
+    }
+
+    private static IntPtr FindZCodeWindow()
+    {
+        IntPtr best = IntPtr.Zero;
+        long bestArea = 0;
+        try
+        {
+            foreach (var process in Process.GetProcessesByName("ZCode"))
+            {
+                IntPtr hwnd = process.MainWindowHandle;
+                Rectangle rect;
+                if (hwnd == IntPtr.Zero || !TryClientRect(hwnd, out rect)) continue;
+                long area = (long)rect.Width * rect.Height;
+                if (area > bestArea) { best = hwnd; bestArea = area; }
+            }
+        }
+        catch { }
+        return best;
+    }
+
+    private static bool IsOccluder(IntPtr hwnd, uint targetProcessId)
+    {
+        if (!IsWindowVisible(hwnd) || IsIconic(hwnd) || IsCloaked(hwnd)) return false;
+        uint processId;
+        GetWindowThreadProcessId(hwnd, out processId);
+        if (processId == targetProcessId) return false;
+        int exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+        if ((exStyle & WS_EX_TRANSPARENT) != 0) return false;
+        if ((exStyle & WS_EX_LAYERED) != 0)
+        {
+            uint colorKey, flags; byte alpha;
+            if (GetLayeredWindowAttributes(hwnd, out colorKey, out alpha, out flags) && (flags & LWA_ALPHA) != 0 && alpha == 0) return false;
+        }
+        return true;
+    }
+
+    private static bool TryClientRect(IntPtr hwnd, out Rectangle rect)
+    {
+        NativeRect native; NativePoint origin = new NativePoint();
+        if (!GetClientRect(hwnd, out native) || !ClientToScreen(hwnd, ref origin)) { rect = Rectangle.Empty; return false; }
+        rect = new Rectangle(origin.X, origin.Y, Math.Max(0, native.Right - native.Left), Math.Max(0, native.Bottom - native.Top));
+        return rect.Width > 0 && rect.Height > 0;
+    }
+
+    private static bool TryWindowRect(IntPtr hwnd, out Rectangle rect)
+    {
+        NativeRect native;
+        // GetWindowRect 与 ClientToScreen 同受调用进程 DPI 虚拟化，避免混用 DWM 物理像素。
+        if (!GetWindowRect(hwnd, out native))
+        { rect = Rectangle.Empty; return false; }
+        rect = Rectangle.FromLTRB(native.Left, native.Top, native.Right, native.Bottom);
+        return rect.Width > 0 && rect.Height > 0;
+    }
+
+    private static bool IsCloaked(IntPtr hwnd)
+    {
+        try { int value; return DwmGetWindowAttributeInt(hwnd, DWMWA_CLOAKED, out value, sizeof(int)) == 0 && value != 0; }
+        catch { return false; }
+    }
+
+    private static bool InteractiveDesktop()
+    {
+        IntPtr desktop = OpenInputDesktop(0, false, DESKTOP_SWITCHDESKTOP);
+        if (desktop == IntPtr.Zero) return false;
+        try { return SwitchDesktop(desktop); }
+        finally { CloseDesktop(desktop); }
+    }
+}
+
 // ============================ CDP 客户端 ============================
 internal sealed class Cdp : IDisposable
 {
@@ -181,11 +317,12 @@ internal sealed class Cdp : IDisposable
     private readonly Dictionary<int, TaskCompletionSource<string>> _pending = new Dictionary<int, TaskCompletionSource<string>>();
     private readonly object _gate = new object();
 
-    public static async Task<Cdp> ConnectAsync(string wsUrl)
+    public static async Task<Cdp> ConnectAsync(string wsUrl, int timeoutMs = 20000)
     {
         var c = new Cdp();
         c._ws = new ClientWebSocket();
-        await c._ws.ConnectAsync(new Uri(wsUrl), CancellationToken.None).ConfigureAwait(false);
+        using (var cts = new CancellationTokenSource(timeoutMs))
+            await c._ws.ConnectAsync(new Uri(wsUrl), cts.Token).ConfigureAwait(false);
         Task.Run((Action)(async () => { try { await c.ReceiveLoop().ConfigureAwait(false); } catch { } c.FailAll("ws closed"); }));
         return c;
     }
@@ -231,18 +368,18 @@ internal sealed class Cdp : IDisposable
         }
     }
 
-    public async Task<string> SendAsync(string method, string paramsJson)
+    public async Task<string> SendAsync(string method, string paramsJson, int timeoutMs = 20000)
     {
         int id = Interlocked.Increment(ref _seq);
         string req = "{\"id\":" + id + ",\"method\":\"" + method + "\",\"params\":" + paramsJson + "}";
         var tcs = new TaskCompletionSource<string>();
         lock (_gate) { _pending[id] = tcs; }
         var bytes = Encoding.UTF8.GetBytes(req);
-        using (var cts = new CancellationTokenSource(20000))
+        using (var cts = new CancellationTokenSource(timeoutMs))
         {
             await _ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, cts.Token).ConfigureAwait(false);
         }
-        var done = await Task.WhenAny(tcs.Task, Task.Delay(20000)).ConfigureAwait(false);
+        var done = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs)).ConfigureAwait(false);
         if (done != tcs.Task)
         {
             lock (_gate) { _pending.Remove(id); }
@@ -252,10 +389,10 @@ internal sealed class Cdp : IDisposable
     }
 
     /// <summary>执行页面表达式（表达式应返回字符串），返回该字符串。抛异常代表页面异常或 CDP 错误。</summary>
-    public async Task<string> EvaluateAsync(string expr)
+    public async Task<string> EvaluateAsync(string expr, int timeoutMs = 20000)
     {
         string p = "{\"expression\":\"" + MiniJson.Escape(expr) + "\",\"returnByValue\":true,\"awaitPromise\":true}";
-        string resp = await SendAsync("Runtime.evaluate", p).ConfigureAwait(false);
+        string resp = await SendAsync("Runtime.evaluate", p, timeoutMs).ConfigureAwait(false);
         object o = MiniJson.Parse(resp);
         var dict = o as Dictionary<string, object>;
         if (dict != null && dict.ContainsKey("error"))
@@ -392,9 +529,10 @@ internal sealed class Config
     public double PanelOpacity = 0.55, PanelBlur = 10;
     public string Theme = "default"; // default | nocturne | glassy
     public string MusicPath = "";
-    public double MusicVolume = 0.6;
-    public bool MusicAutoplay = true; // 跟随 ZCode 窗口可见性
-    public bool VideoSound = false;
+    public string SoundSource = "none"; // none | video | music
+    public bool SoundEnabled = false;   // 用户期望声音启用；实际播放还受 FollowWindow 门控
+    public double SoundVolume = 0.6;
+    public bool FollowWindow = true;
     public string RotateDir = "";       // 轮播文件夹（空=关闭）
     public double RotateMinutes = 15;
     public string RotateOrder = "seq";  // seq | random
@@ -428,11 +566,22 @@ internal sealed class Config
                     c.PanelBlur = MiniJson.Num(p.ContainsKey("panelBlur") ? p["panelBlur"] : null, c.PanelBlur);
                     if (d.ContainsKey("theme")) c.Theme = MiniJson.Str(d["theme"]) ?? "default";
                     if (d.ContainsKey("music")) c.MusicPath = MiniJson.Str(d["music"]) ?? "";
-                    if (d.ContainsKey("musicVolume")) c.MusicVolume = MiniJson.Num(d["musicVolume"], c.MusicVolume);
-                    if (d.ContainsKey("musicAutoplay")) c.MusicAutoplay = MiniJson.Num(d["musicAutoplay"], 0) > 0 || (d["musicAutoplay"] is bool && (bool)d["musicAutoplay"]);
-                    if (d.ContainsKey("videoSound")) c.VideoSound = MiniJson.Num(d["videoSound"], 0) > 0 || (d["videoSound"] is bool && (bool)d["videoSound"]);
                 }
             }
+            bool hasSoundSource = d.ContainsKey("soundSource");
+            if (hasSoundSource) c.SoundSource = (MiniJson.Str(d["soundSource"]) ?? "none").ToLowerInvariant();
+            if (d.ContainsKey("soundEnabled")) c.SoundEnabled = MiniJson.Num(d["soundEnabled"], 0) > 0;
+            if (d.ContainsKey("soundVolume")) c.SoundVolume = MiniJson.Num(d["soundVolume"], c.SoundVolume);
+            else if (d.ContainsKey("musicVolume")) c.SoundVolume = MiniJson.Num(d["musicVolume"], c.SoundVolume);
+            if (d.ContainsKey("followWindow")) c.FollowWindow = MiniJson.Num(d["followWindow"], 0) > 0;
+            else if (d.ContainsKey("musicAutoplay")) c.FollowWindow = MiniJson.Num(d["musicAutoplay"], 0) > 0;
+            if (!hasSoundSource)
+            {
+                bool legacyVideoSound = d.ContainsKey("videoSound") && MiniJson.Num(d["videoSound"], 0) > 0;
+                c.SoundSource = legacyVideoSound ? "video" : (!string.IsNullOrEmpty(c.MusicPath) ? "music" : "none");
+                c.SoundEnabled = c.SoundSource != "none";
+            }
+            c.NormalizeSound();
             if (d.ContainsKey("rotateDir")) c.RotateDir = MiniJson.Str(d["rotateDir"]) ?? "";
             if (d.ContainsKey("rotateMinutes")) c.RotateMinutes = MiniJson.Num(d["rotateMinutes"], c.RotateMinutes);
             if (d.ContainsKey("rotateOrder")) c.RotateOrder = MiniJson.Str(d["rotateOrder"]) ?? "seq";
@@ -457,10 +606,12 @@ internal sealed class Config
         sb.Append(",\"blur\":").Append(Blur.ToString(System.Globalization.CultureInfo.InvariantCulture));
         sb.Append(",\"panelOpacity\":").Append(PanelOpacity.ToString(System.Globalization.CultureInfo.InvariantCulture));
         sb.Append(",\"panelBlur\":").Append(PanelBlur.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        NormalizeSound();
         sb.Append("},\"theme\":\"").Append(MiniJson.Escape(Theme)).Append("\",\"music\":\"").Append(MiniJson.Escape(MusicPath));
-        sb.Append("\",\"musicVolume\":").Append(MusicVolume.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        sb.Append(",\"musicAutoplay\":").Append(MusicAutoplay ? "true" : "false");
-        sb.Append(",\"videoSound\":").Append(VideoSound ? "true" : "false");
+        sb.Append("\",\"soundSource\":\"").Append(MiniJson.Escape(SoundSource)).Append("\"");
+        sb.Append(",\"soundEnabled\":").Append(SoundEnabled ? "true" : "false");
+        sb.Append(",\"soundVolume\":").Append(SoundVolume.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        sb.Append(",\"followWindow\":").Append(FollowWindow ? "true" : "false");
         sb.Append(",\"rotateDir\":\"").Append(MiniJson.Escape(RotateDir)).Append("\"");
         sb.Append(",\"rotateMinutes\":").Append(RotateMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture));
         sb.Append(",\"rotateOrder\":\"").Append(MiniJson.Escape(RotateOrder)).Append("\"");
@@ -468,6 +619,16 @@ internal sealed class Config
         sb.Append(",\"glassColor\":\"").Append(MiniJson.Escape(GlassColor)).Append("\"");
         sb.Append(",\"updatedAt\":\"").Append(DateTime.UtcNow.ToString("o")).Append("\"}");
         File.WriteAllText(Config.PathOf, sb.ToString());
+    }
+
+    public void NormalizeSound()
+    {
+        SoundSource = (SoundSource ?? "none").ToLowerInvariant();
+        if (SoundSource != "none" && SoundSource != "video" && SoundSource != "music") SoundSource = "none";
+        if (SoundSource == "video" && Type != "video") SoundSource = "none";
+        if (SoundSource == "music" && string.IsNullOrEmpty(MusicPath)) SoundSource = "none";
+        if (SoundSource == "none") SoundEnabled = false;
+        SoundVolume = Math.Max(0, Math.Min(1, SoundVolume));
     }
 }
 
@@ -542,6 +703,17 @@ internal static class Injector
 {
     public const string Host = "http://127.0.0.1:9335";
 
+    private sealed class TimedWebClient : WebClient
+    {
+        public int TimeoutMs;
+        protected override WebRequest GetWebRequest(Uri address)
+        {
+            WebRequest request = base.GetWebRequest(address);
+            request.Timeout = TimeoutMs;
+            return request;
+        }
+    }
+
     private static string CssTemplate()
     {
         try
@@ -585,7 +757,7 @@ async (cfg) => {
       if (i >= 0) { const c = [...document.adoptedStyleSheets]; c.splice(i, 1); document.adoptedStyleSheets = c; }
       W.sheet = null;
     }
-    W.on = false; W.applyParams = null; W.setMusic = null; W.swapImage = null; W.video = null; W.audio = null;
+    W.on = false; W.applyParams = null; W.setSound = null; W.getSoundState = null; W.syncSound = null; W.swapImage = null; W.video = null; W.audio = null; W.sound = null;
   };
   teardown();
   if (!cfg.on) return 'CLEARED';
@@ -602,44 +774,86 @@ async (cfg) => {
   overlay.setAttribute('style', 'position:fixed;inset:0;z-index:-1;pointer-events:none;background:#000;');
   document.documentElement.appendChild(overlay);
   const base = 'position:fixed;inset:0;z-index:-1;pointer-events:none;';
-  W.musicAutoplay = cfg.musicAutoplay !== undefined ? cfg.musicAutoplay : true;
-  W.userPaused = false;
+  W.sound = {
+    source: ['none', 'video', 'music'].indexOf(cfg.soundSource) >= 0 ? cfg.soundSource : 'none',
+    enabled: cfg.soundEnabled === true,
+    volume: cfg.soundVolume !== undefined ? cfg.soundVolume : 0.6,
+    followWindow: cfg.followWindow !== undefined ? cfg.followWindow : true,
+    zcodeVisible: cfg.zcodeVisible !== false
+  };
   if (cfg.video) {
     const v = document.createElement('video');
     v.id = 'zcode-wallpaper-video';
-    v.src = cfg.img; v.loop = true; v.muted = !cfg.videoSound; v.playsInline = true; // 无 autoplay 属性: 起播完全由 JS 门控(onVis/初始 gate), 否则浏览器绕过焦点门控
+    v.src = cfg.img; v.loop = true; v.muted = true; v.playsInline = true;
     v.setAttribute('style', 'width:100%;height:100%;object-fit:cover;display:block;');
     layer.setAttribute('style', base);
     layer.appendChild(v);
     W.video = v;
-    // 跟随窗口勾选且页面非活跃(隐藏或失焦)时不抢播, 等 onVis 统一起播; 取消勾选(独立播放)则照常起播
-    const pp = (W.musicAutoplay && !(document.visibilityState === 'visible' && document.hasFocus())) ? null : v.play();
+    const pp = v.play(); // 视频画面与声音策略分离：画面始终循环，声音只由 syncSound 改 muted
     if (pp && pp.catch) pp.catch(() => {});
   } else {
     layer.setAttribute('style', base + 'background-image:url(' + JSON.stringify(cfg.img) + ');background-position:center;background-size:cover;background-repeat:no-repeat;');
   }
-  // 独立音乐层（与壁纸无关; audio loop 常驻, 可见性由 onVis 控制）
+  // 独立音乐层常驻但默认暂停，唯一的 syncSound 决定哪个来源真正发声。
   if (cfg.music) {
     const a = document.createElement('audio');
     a.id = 'zcode-wallpaper-audio';
-    a.src = cfg.music; a.loop = true; a.volume = cfg.musicVolume !== undefined ? cfg.musicVolume : 0.6;
+    a.src = cfg.music; a.loop = true; a.volume = W.sound.volume;
     document.documentElement.appendChild(a);
     W.audio = a;
-    if (W.musicAutoplay) {
-      const tryPlay = () => { const mp = a.play(); if (mp && mp.catch) mp.catch(() => {}); };
-      if (document.visibilityState === 'visible' && document.hasFocus()) tryPlay(); // 跟随窗口: 非活跃(隐藏/失焦)不抢播, 等 onVis
-      setTimeout(() => { if (a.paused && W.musicAutoplay && document.visibilityState === 'visible' && document.hasFocus()) tryPlay(); }, 900);
-    }
   }
-  // v1.5.1: active = 可见且有焦点 — 失焦(切到别的窗口)与最小化/隐藏都算「不在前台」, 跟随窗口开时统一暂停
-  W.onVis = () => {
-    const act = document.visibilityState === 'visible' && document.hasFocus();
-    if (W.video && W.musicAutoplay) { if (!act) { try { W.video.pause(); } catch (e) {} } else { const p = W.video.play(); if (p && p.catch) p.catch(() => {}); } }
-    if (W.audio && W.musicAutoplay) { if (!act) { try { W.audio.pause(); } catch (e) {} } else if (!W.userPaused) { const p = W.audio.play(); if (p && p.catch) p.catch(() => {}); } }
+  const isActive = () => document.visibilityState === 'visible' && W.sound.zcodeVisible;
+  const sourceAvailable = () => W.sound.source === 'video' ? !!W.video : (W.sound.source === 'music' ? !!W.audio : false);
+  W.getSoundState = () => {
+    const active = isActive();
+    const available = sourceAvailable();
+    const wanted = W.sound.enabled && available;
+    const allowed = wanted && (!W.sound.followWindow || active);
+    const actual = W.sound.source === 'video'
+      ? !!(W.video && !W.video.paused && !W.video.muted)
+      : (W.sound.source === 'music' ? !!(W.audio && !W.audio.paused) : false);
+    let reason = 'none';
+    if (W.sound.source !== 'none' && !available) reason = 'unavailable';
+    else if (W.sound.source !== 'none' && !W.sound.enabled) reason = 'disabled';
+    else if (wanted && W.sound.followWindow && !active) reason = 'notVisible';
+    else if (allowed && !actual) reason = 'blocked';
+    else if (actual) reason = 'playing';
+    return { source: W.sound.source, enabled: W.sound.enabled, effectiveEnabled: actual, reason, volume: W.sound.volume, followWindow: W.sound.followWindow, zcodeVisible: W.sound.zcodeVisible, focused: document.hasFocus(), visible: document.visibilityState === 'visible' };
   };
+  W.syncSound = async () => {
+    const active = isActive();
+    const effective = W.sound.enabled && sourceAvailable() && (!W.sound.followWindow || active);
+    if (W.video) {
+      W.video.volume = W.sound.volume;
+      W.video.muted = !(W.sound.source === 'video' && effective);
+      if (W.video.paused) { try { await W.video.play(); } catch (e) {} }
+    }
+    if (W.audio) {
+      W.audio.volume = W.sound.volume;
+      if (W.sound.source === 'music' && effective) { try { await W.audio.play(); } catch (e) {} }
+      else { try { W.audio.pause(); } catch (e) {} }
+    }
+    return W.getSoundState();
+  };
+  W.setSound = async (s) => {
+    if (s.musicSrc !== undefined) {
+      if (s.musicSrc) {
+        let a = W.audio;
+        if (!a) { a = document.createElement('audio'); a.id = 'zcode-wallpaper-audio'; a.loop = true; document.documentElement.appendChild(a); W.audio = a; }
+        if (a.src !== s.musicSrc) a.src = s.musicSrc;
+        else if (s.reloadMusic === true) { try { a.load(); } catch (e) {} }
+      } else if (W.audio) { try { W.audio.pause(); } catch (e) {} W.audio.remove(); W.audio = null; }
+    }
+    if (['none', 'video', 'music'].indexOf(s.source) >= 0) W.sound.source = s.source;
+    if (s.enabled !== undefined) W.sound.enabled = s.enabled === true;
+    if (s.volume !== undefined) W.sound.volume = Math.max(0, Math.min(1, s.volume));
+    if (s.followWindow !== undefined) W.sound.followWindow = s.followWindow === true;
+    if (s.zcodeVisible !== undefined) W.sound.zcodeVisible = s.zcodeVisible === true;
+    if (W.sound.source === 'none') W.sound.enabled = false;
+    return await W.syncSound();
+  };
+  W.onVis = () => { W.syncSound(); };
   document.addEventListener('visibilitychange', W.onVis);
-  window.addEventListener('focus', W.onVis);
-  window.addEventListener('blur', W.onVis);
   W.applyParams = (p) => {
     const l = document.getElementById('zcode-wallpaper-layer');
     const o = document.getElementById('zcode-wallpaper-overlay');
@@ -652,22 +866,6 @@ async (cfg) => {
     if (p.glassColor) document.documentElement.style.setProperty('--zcwp-panel-rgb', p.glassColor);
     else document.documentElement.style.removeProperty('--zcwp-panel-rgb');
     if (p.theme) document.documentElement.setAttribute('data-zcwp-theme', p.theme);
-    if (W.video) { W.video.muted = !(p.videoSound === true); W.video.volume = p.musicVolume !== undefined ? p.musicVolume : 0.6; }
-    if (W.audio && p.musicVolume !== undefined) W.audio.volume = p.musicVolume;
-  };
-  W.setMusic = (m) => {
-    if (m.src) {
-      let a = W.audio;
-      if (!a) { a = document.createElement('audio'); a.id = 'zcode-wallpaper-audio'; a.loop = true; document.documentElement.appendChild(a); W.audio = a; }
-      if (a.src !== m.src) a.src = m.src;
-      if (m.volume !== undefined) a.volume = m.volume;
-      W.musicAutoplay = m.autoplay !== undefined ? m.autoplay : W.musicAutoplay;
-      if (m.playing) { const p = a.play(); if (p && p.catch) p.catch(() => {}); }
-      else a.pause();
-      return 'OK';
-    }
-    if (W.audio) { try { W.audio.pause(); } catch (e) {} W.audio.remove(); W.audio = null; }
-    return 'OK';
   };
   W.swapImage = (src) => {
     if (W.video) return 'VIDEO';
@@ -686,22 +884,24 @@ async (cfg) => {
     return 'OK';
   };
   W.applyParams(cfg);
-  W.ver = 6; W.on = true;
+  await W.syncSound();
+  W.ver = 8; W.on = true;
   return 'OK';
 }";
 
     private static string CfgJson(Config c, string url, bool video, string css)
     {
+        c.NormalizeSound();
         string musicUrl = "";
         if (c.MusicPath != null && c.MusicPath.Length > 0)
         {
             try { musicUrl = Util.FileUrl(Path.Combine(Program.DataDir, "music" + Path.GetExtension(c.MusicPath))); } catch { }
         }
         return string.Format(System.Globalization.CultureInfo.InvariantCulture,
-            "{{\"on\":true,\"img\":\"{0}\",\"video\":{1},\"opacity\":{2},\"brightness\":{3},\"saturation\":{4},\"contrast\":{5},\"overlay\":{6},\"blur\":{7},\"panelOpacity\":{8},\"panelBlur\":{9},\"theme\":\"{10}\",\"music\":{11},\"musicVolume\":{12},\"musicAutoplay\":{13},\"videoSound\":{14},\"css\":\"{15}\",\"accentColor\":\"{16}\",\"glassColor\":\"{17}\"}}",
+            "{{\"on\":true,\"img\":\"{0}\",\"video\":{1},\"opacity\":{2},\"brightness\":{3},\"saturation\":{4},\"contrast\":{5},\"overlay\":{6},\"blur\":{7},\"panelOpacity\":{8},\"panelBlur\":{9},\"theme\":\"{10}\",\"music\":{11},\"soundSource\":\"{12}\",\"soundEnabled\":{13},\"soundVolume\":{14},\"followWindow\":{15},\"zcodeVisible\":{16},\"css\":\"{17}\",\"accentColor\":\"{18}\",\"glassColor\":\"{19}\"}}",
             MiniJson.Escape(url), video ? "true" : "false", c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur, c.PanelOpacity, c.PanelBlur, MiniJson.Escape(c.Theme),
             (musicUrl.Length > 0 ? "\"" + MiniJson.Escape(musicUrl) + "\"" : "null"),
-            c.MusicVolume, c.MusicAutoplay ? "true" : "false", c.VideoSound ? "true" : "false", MiniJson.Escape(css),
+            MiniJson.Escape(c.SoundSource), c.SoundEnabled ? "true" : "false", c.SoundVolume, c.FollowWindow ? "true" : "false", WindowVisibility.IsZCodeVisible() ? "true" : "false", MiniJson.Escape(css),
             MiniJson.Escape(string.IsNullOrEmpty(c.AccentColor) ? "" : "rgb(" + c.AccentColor + ")"),
             MiniJson.Escape(c.GlassColor ?? ""));
     }
@@ -743,8 +943,8 @@ async (cfg) => {
     public static async Task<string> LiveUpdateAsync(string targetWsUrl, Config c)
     {
         string expr = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-            "(() => {{ const W = window.__ZCWP; if (!W || !W.on || !W.applyParams) return 'NO'; W.applyParams({{opacity:{0},brightness:{1},saturation:{2},contrast:{3},overlay:{4},blur:{5},panelOpacity:{6},panelBlur:{7},theme:\"{8}\",musicVolume:{9},videoSound:{10},accentColor:\"{11}\",glassColor:\"{12}\"}}); return 'OK'; }})()",
-            c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur, c.PanelOpacity, c.PanelBlur, MiniJson.Escape(c.Theme), c.MusicVolume, c.VideoSound ? "true" : "false",
+            "(() => {{ const W = window.__ZCWP; if (!W || !W.on || !W.applyParams) return 'NO'; W.applyParams({{opacity:{0},brightness:{1},saturation:{2},contrast:{3},overlay:{4},blur:{5},panelOpacity:{6},panelBlur:{7},theme:\"{8}\",accentColor:\"{9}\",glassColor:\"{10}\"}}); return 'OK'; }})()",
+            c.Opacity, c.Brightness, c.Saturation, c.Contrast, c.Overlay, c.Blur, c.PanelOpacity, c.PanelBlur, MiniJson.Escape(c.Theme),
             MiniJson.Escape(string.IsNullOrEmpty(c.AccentColor) ? "" : "rgb(" + c.AccentColor + ")"),
             MiniJson.Escape(c.GlassColor ?? ""));
         using (var cdp = await Cdp.ConnectAsync(targetWsUrl).ConfigureAwait(false))
@@ -753,26 +953,31 @@ async (cfg) => {
         }
     }
 
-    /// <summary>音乐命令: 内联 DOM 操作（不依赖注入层版本）; src 为空=清除; playing: 1=播/0=暂停/-1=保持现状; autoplay/userPaused 同步到页面供 onVis 门控（移出 src 分支: 纯视频壁纸无音乐文件时开关状态也要送达）</summary>
-    public static async Task<string> SetMusicAsync(string targetWsUrl, string src, int playing, double volume, bool autoplay)
+    /// <summary>推送唯一声音状态并返回页面实际状态 JSON；src 为空时清除背景音乐元素。</summary>
+    public static async Task<string> SetSoundAsync(string targetWsUrl, string src, string source, bool enabled, double volume, bool followWindow, bool reloadMusic = false)
     {
         string expr = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-            "(() => {{ const W = window.__ZCWP || {{}}; let a = document.getElementById('zcode-wallpaper-audio');"
-            + " const src = {0}; const vol = {1};"
-            + " W.musicAutoplay = {2};"
-            + " if ({3} === 1) W.userPaused = false; else if ({3} === 0) W.userPaused = true;"
-            + " if (src) {{"
-            + "   if (!a) {{ a = document.createElement('audio'); a.id = 'zcode-wallpaper-audio'; a.loop = true; document.documentElement.appendChild(a); }}"
-            + "   if (a.src !== src) a.src = src;"
-            + "   a.volume = vol;"
-            + "   W.audio = a;"
-            + "   if ({3} === 1) {{ const p = a.play(); if (p && p.catch) p.catch(() => {{}}); }} else if ({3} === 0) a.pause();"
-            + "   return 'OK';"
-            + " }}"
-            + " if (a) {{ try {{ a.pause(); }} catch (e) {{}} a.remove(); W.audio = null; }}"
-            + " return 'OK';"
-            + " }})()",
-            (src != null && src.Length > 0 ? "\"" + MiniJson.Escape(src) + "\"" : "null"), volume, autoplay ? "true" : "false", playing);
+            "(async () => {{ const W = window.__ZCWP; if (!W || !W.on || !W.setSound) return 'NO'; return JSON.stringify(await W.setSound({{musicSrc:{0},source:\"{1}\",enabled:{2},volume:{3},followWindow:{4},reloadMusic:{5}}})); }})()",
+            (src != null && src.Length > 0 ? "\"" + MiniJson.Escape(src) + "\"" : "null"), MiniJson.Escape(source), enabled ? "true" : "false", volume, followWindow ? "true" : "false", reloadMusic ? "true" : "false");
+        using (var cdp = await Cdp.ConnectAsync(targetWsUrl).ConfigureAwait(false))
+        {
+            return await cdp.EvaluateAsync(expr).ConfigureAwait(false);
+        }
+    }
+
+    public static async Task<string> SetZCodeVisibleAsync(string targetWsUrl, bool visible)
+    {
+        string expr = "(async () => { const W = window.__ZCWP; if (!W || !W.on || !W.setSound) return 'NO'; return JSON.stringify(await W.setSound({zcodeVisible:"
+            + (visible ? "true" : "false") + "})); })()";
+        using (var cdp = await Cdp.ConnectAsync(targetWsUrl, 250).ConfigureAwait(false))
+        {
+            return await cdp.EvaluateAsync(expr, 250).ConfigureAwait(false);
+        }
+    }
+
+    public static async Task<string> GetSoundStateAsync(string targetWsUrl)
+    {
+        const string expr = "(() => { const W = window.__ZCWP; if (!W || !W.on || !W.getSoundState) return 'NO'; return JSON.stringify(W.getSoundState()); })()";
         using (var cdp = await Cdp.ConnectAsync(targetWsUrl).ConfigureAwait(false))
         {
             return await cdp.EvaluateAsync(expr).ConfigureAwait(false);
@@ -845,10 +1050,10 @@ async (cfg) => {
         public string Url;
     }
 
-    public static List<Target> GetTargets()
+    public static List<Target> GetTargets(int timeoutMs = 100000)
     {
         string json;
-        using (var wc = new WebClient())
+        using (var wc = new TimedWebClient { TimeoutMs = timeoutMs })
         {
             wc.Proxy = null; // 127.0.0.1 请求绝不能走系统代理（iKuuu/clash 会黑洞它）
             wc.Encoding = Encoding.UTF8;
@@ -885,6 +1090,62 @@ async (cfg) => {
             return true;
         }
         catch { return false; }
+    }
+}
+
+// ============================ 屏幕可见性声音门控 ============================
+internal static class VisibilityGate
+{
+    private static readonly object Gate = new object();
+    private static bool? _desired;
+    private static bool? _delivered;
+    private static bool _pushing;
+    private static Task _pushTask;
+
+    public static async Task Run(CancellationToken cancel)
+    {
+        while (!cancel.IsCancellationRequested)
+        {
+            bool visible = WindowVisibility.IsZCodeVisible();
+            bool startPush = false;
+            lock (Gate)
+            {
+                _desired = visible;
+                if (!_pushing && (!_delivered.HasValue || _delivered.Value != visible)) { _pushing = true; startPush = true; }
+            }
+            if (startPush)
+            {
+                Config cfg = Config.Load();
+                if (cfg == null || !cfg.On)
+                {
+                    lock (Gate) { _delivered = visible; _pushing = false; }
+                }
+                else _pushTask = Task.Run(() => PushLatestAsync());
+            }
+            await Task.Delay(500, cancel).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task PushLatestAsync()
+    {
+        bool wanted;
+        lock (Gate) { wanted = _desired.GetValueOrDefault(); }
+        bool success = false;
+        try
+        {
+            var targets = Injector.GetTargets(250);
+            var pushes = new List<Task<string>>();
+            foreach (var target in targets) pushes.Add(Injector.SetZCodeVisibleAsync(target.WsUrl, wanted));
+            string[] results = await Task.WhenAll(pushes.ToArray()).ConfigureAwait(false);
+            success = true;
+            foreach (string result in results) if (result == "NO") success = false;
+        }
+        catch { }
+        lock (Gate)
+        {
+            _delivered = success ? (bool?)wanted : null;
+            _pushing = false;
+        }
     }
 }
 
@@ -933,7 +1194,7 @@ internal static class Watch
                             {
                                 using (var cdp = await Cdp.ConnectAsync(t.WsUrl).ConfigureAwait(false))
                                 {
-                                    present = await cdp.EvaluateAsync("String(!!(window.__ZCWP && window.__ZCWP.on))").ConfigureAwait(false);
+                                    present = await cdp.EvaluateAsync("String(!!(window.__ZCWP && window.__ZCWP.on && window.__ZCWP.ver === 8))").ConfigureAwait(false);
                                 }
                                 if (present == "false") shouldInject = true;
                             }
@@ -1138,15 +1399,15 @@ internal sealed class MainForm : Form
     private Label _opacityV, _brightnessV, _saturationV, _contrastV, _overlayV, _blurV, _panelOpacityV, _panelBlurV;
     private ComboBox _themeCombo;
     private TextBox _musicPathBox;
-    private Button _musicPlayBtn, _musicClearBtn;
-    private TrackBar _musicVolumeBar;
-    private Label _musicVolumeV;
-    private CheckBox _musicFollowChk, _videoSoundChk;
-    private bool _musicPlaying;
+    private Button _soundToggleBtn, _musicClearBtn;
+    private TrackBar _soundVolumeBar;
+    private Label _soundVolumeV, _soundStateLabel;
+    private CheckBox _followWindowChk;
+    private RadioButton _soundNoneRadio, _soundVideoRadio, _soundMusicRadio;
     private TextBox _rotatePathBox;
     private ComboBox _rotateIntervalCombo, _rotateOrderCombo;
     private Button _accentBtn, _glassBtn;
-    private System.Windows.Forms.Timer _throttle;
+    private System.Windows.Forms.Timer _throttle, _soundThrottle;
     private Config _cfg;
     private bool _exitRequested;
     private bool _loadingSliders;
@@ -1160,8 +1421,11 @@ internal sealed class MainForm : Form
         BuildTray();
         _throttle = new System.Windows.Forms.Timer { Interval = 120 };
         _throttle.Tick += ThrottleTick;
+        _soundThrottle = new System.Windows.Forms.Timer { Interval = 120 };
+        _soundThrottle.Tick += async delegate { _soundThrottle.Stop(); await LiveSoundAsync(); };
         _cts = new CancellationTokenSource();
         Task.Run(() => Watch.Run(_cts.Token));
+        Task.Run(() => VisibilityGate.Run(_cts.Token));
         ThreadPool.RegisterWaitForSingleObject(Program.ShowGuiEvent,
             (s, timedOut) => { try { BeginInvoke((Action)ShowPanel); } catch { } },
             null, -1, false);
@@ -1185,6 +1449,7 @@ internal sealed class MainForm : Form
         WindowState = FormWindowState.Normal;
         Activate();
         RefreshStatusAsync();
+        RefreshSoundStateAsync();
     }
 
     /// <summary>从磁盘重读配置。守护常驻期间 CLI 可能直接改过 config.json，
@@ -1196,7 +1461,7 @@ internal sealed class MainForm : Form
 
     private void BuildTray()
     {
-        _tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "ZCode 壁纸 v1.5.1", Visible = true };
+        _tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "ZCode 壁纸 v1.6.0", Visible = true };
         var menu = new ContextMenu();
         menu.MenuItems.Add("打开面板", delegate { ShowPanel(); });
         menu.MenuItems.Add("截图检查", delegate { ShotAsync(); });
@@ -1229,7 +1494,7 @@ internal sealed class MainForm : Form
 
     private void BuildUi()
     {
-        Text = "ZCode 壁纸 v1.5.1";
+        Text = "ZCode 壁纸 v1.6.0";
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -1318,53 +1583,53 @@ internal sealed class MainForm : Form
 
     private void BuildPlaybackUi(TabPage page)
     {
-        _musicPlayBtn = new Button { Location = new Point(12, 12), Size = new Size(110, 28), Text = "▶ 播放" };
-        _musicPlayBtn.Click += delegate { ToggleMusic(); };
-        page.Controls.Add(_musicPlayBtn);
-        _musicClearBtn = new Button { Location = new Point(130, 12), Size = new Size(90, 28), Text = "清除" };
+        page.Controls.Add(new Label { Location = new Point(12, 16), Size = new Size(72, 20), Text = "声音来源:" });
+        _soundNoneRadio = new RadioButton { Location = new Point(88, 14), Size = new Size(58, 22), Text = "无声" };
+        _soundVideoRadio = new RadioButton { Location = new Point(152, 14), Size = new Size(92, 22), Text = "视频原声" };
+        _soundMusicRadio = new RadioButton { Location = new Point(250, 14), Size = new Size(92, 22), Text = "背景音乐" };
+        _soundNoneRadio.CheckedChanged += delegate { if (!_loadingSliders && _soundNoneRadio.Checked) SelectSoundSource("none"); };
+        _soundVideoRadio.CheckedChanged += delegate { if (!_loadingSliders && _soundVideoRadio.Checked) SelectSoundSource("video"); };
+        _soundMusicRadio.CheckedChanged += delegate { if (!_loadingSliders && _soundMusicRadio.Checked) SelectSoundSource("music"); };
+        page.Controls.Add(_soundNoneRadio);
+        page.Controls.Add(_soundVideoRadio);
+        page.Controls.Add(_soundMusicRadio);
+
+        _soundToggleBtn = new Button { Location = new Point(12, 46), Size = new Size(126, 28), Text = "请选择声音来源" };
+        _soundToggleBtn.Click += delegate { ToggleSound(); };
+        page.Controls.Add(_soundToggleBtn);
+        _musicClearBtn = new Button { Location = new Point(146, 46), Size = new Size(90, 28), Text = "清除音乐" };
         _musicClearBtn.Click += delegate { ClearMusic(); };
         page.Controls.Add(_musicClearBtn);
-        page.Controls.Add(new Label { Location = new Point(232, 18), Size = new Size(40, 20), Text = "音量" });
-        _musicVolumeBar = new TrackBar { Location = new Point(272, 10), Size = new Size(120, 32), Minimum = 0, Maximum = 100, TickFrequency = 20 };
-        _musicVolumeV = new Label { Location = new Point(398, 18), Size = new Size(44, 20), Text = "" };
-        _musicVolumeBar.ValueChanged += delegate
+        page.Controls.Add(new Label { Location = new Point(246, 52), Size = new Size(40, 20), Text = "音量" });
+        _soundVolumeBar = new TrackBar { Location = new Point(286, 44), Size = new Size(110, 32), Minimum = 0, Maximum = 100, TickFrequency = 20 };
+        _soundVolumeV = new Label { Location = new Point(400, 52), Size = new Size(42, 20), Text = "" };
+        _soundVolumeBar.ValueChanged += delegate
         {
             if (_loadingSliders) return;
-            _musicVolumeV.Text = _musicVolumeBar.Value.ToString();
+            _soundVolumeV.Text = _soundVolumeBar.Value.ToString();
             ReloadCfg();
-            _cfg.MusicVolume = _musicVolumeBar.Value / 100.0;
+            _cfg.SoundVolume = _soundVolumeBar.Value / 100.0;
             _cfg.Save();
-            _throttle.Stop();
-            _throttle.Start();
+            _soundThrottle.Stop();
+            _soundThrottle.Start();
         };
-        page.Controls.Add(_musicVolumeBar);
-        page.Controls.Add(_musicVolumeV);
-        _musicFollowChk = new CheckBox { Location = new Point(12, 52), Size = new Size(260, 22), Text = "跟随窗口（最小化暂停播放）" };
-        _musicFollowChk.CheckedChanged += delegate
-        {
-            if (_loadingSliders) return;
-            ReloadCfg();
-            _cfg.MusicAutoplay = _musicFollowChk.Checked;
-            _cfg.Save();
-            LiveMusicAsync(-1); // 只同步跟随语义, 不改变播放状态
-        };
-        page.Controls.Add(_musicFollowChk);
-        _videoSoundChk = new CheckBox { Location = new Point(12, 80), Size = new Size(150, 22), Text = "视频自带声音" };
-        _videoSoundChk.CheckedChanged += delegate
+        page.Controls.Add(_soundVolumeBar);
+        page.Controls.Add(_soundVolumeV);
+        _followWindowChk = new CheckBox { Location = new Point(12, 82), Size = new Size(340, 22), Text = "ZCode 不可见时暂停声音" };
+        _followWindowChk.CheckedChanged += async delegate
         {
             if (_loadingSliders) return;
             ReloadCfg();
-            _cfg.VideoSound = _videoSoundChk.Checked;
+            _cfg.FollowWindow = _followWindowChk.Checked;
             _cfg.Save();
-            if (_cfg.VideoSound) { _musicPlaying = false; _musicPlayBtn.Text = "▶ 播放"; LiveMusicAsync(0); } // 互斥: 选视频声则暂停音乐
-            LiveUpdateAsync(); // 两个方向都立即推送 muted 状态, 不等 120ms 节流 (坑 21)
-            _throttle.Stop();
-            _throttle.Start();
+            await LiveSoundAsync();
         };
-        page.Controls.Add(_videoSoundChk);
+        page.Controls.Add(_followWindowChk);
+        _soundStateLabel = new Label { Location = new Point(12, 108), Size = new Size(430, 36), ForeColor = Color.DimGray, Text = "当前：无声" };
+        page.Controls.Add(_soundStateLabel);
 
-        page.Controls.Add(new Label { Location = new Point(12, 118), Size = new Size(64, 20), Text = "轮播间隔" });
-        _rotateIntervalCombo = new ComboBox { Location = new Point(80, 115), Size = new Size(110, 24), DropDownStyle = ComboBoxStyle.DropDownList };
+        page.Controls.Add(new Label { Location = new Point(12, 156), Size = new Size(64, 20), Text = "轮播间隔" });
+        _rotateIntervalCombo = new ComboBox { Location = new Point(80, 153), Size = new Size(110, 24), DropDownStyle = ComboBoxStyle.DropDownList };
         _rotateIntervalCombo.Items.AddRange(new object[] { "1 分钟", "5 分钟", "15 分钟", "30 分钟", "60 分钟" });
         _rotateIntervalCombo.SelectedIndexChanged += delegate
         {
@@ -1373,8 +1638,8 @@ internal sealed class MainForm : Form
             if (_rotateIntervalCombo.SelectedIndex >= 0) { ReloadCfg(); _cfg.RotateMinutes = mins[_rotateIntervalCombo.SelectedIndex]; _cfg.Save(); }
         };
         page.Controls.Add(_rotateIntervalCombo);
-        page.Controls.Add(new Label { Location = new Point(210, 118), Size = new Size(40, 20), Text = "顺序" });
-        _rotateOrderCombo = new ComboBox { Location = new Point(252, 115), Size = new Size(110, 24), DropDownStyle = ComboBoxStyle.DropDownList };
+        page.Controls.Add(new Label { Location = new Point(210, 156), Size = new Size(40, 20), Text = "顺序" });
+        _rotateOrderCombo = new ComboBox { Location = new Point(252, 153), Size = new Size(110, 24), DropDownStyle = ComboBoxStyle.DropDownList };
         _rotateOrderCombo.Items.AddRange(new object[] { "顺序", "随机" });
         _rotateOrderCombo.SelectedIndexChanged += delegate
         {
@@ -1384,7 +1649,7 @@ internal sealed class MainForm : Form
             _cfg.Save();
         };
         page.Controls.Add(_rotateOrderCombo);
-        page.Controls.Add(new Label { Location = new Point(12, 150), Size = new Size(430, 18), ForeColor = Color.DimGray, Text = "取消勾选「跟随窗口」后，最小化 ZCode 音乐/视频将继续播放" });
+        page.Controls.Add(new Label { Location = new Point(12, 188), Size = new Size(430, 18), ForeColor = Color.DimGray, Text = "关闭后声音不受可见性影响；视频画面始终继续播放" });
     }
 
     private void BuildStyleUi(TabPage page)
@@ -1500,7 +1765,7 @@ internal sealed class MainForm : Form
         return Path.Combine(Program.DataDir, "music" + Path.GetExtension(_cfg.MusicPath));
     }
 
-    /// <summary>设置音乐文件: 缓存副本 + 保存 + 开播</summary>
+    /// <summary>设置音乐文件: 缓存副本 + 选择背景音乐来源 + 保存。</summary>
     private async void SetMusicFile(string rawPath)
     {
         string path = Util.NormalizePath(rawPath);
@@ -1511,65 +1776,125 @@ internal sealed class MainForm : Form
             File.Copy(path, cached, true);
             ReloadCfg();
             _cfg.MusicPath = path;
-            _cfg.MusicVolume = _musicVolumeBar.Value / 100.0;
-            _cfg.VideoSound = false; // 互斥: 用音乐则关视频声音
-            _loadingSliders = true;
-            _videoSoundChk.Checked = false;
-            _loadingSliders = false;
+            _cfg.SoundSource = "music";
+            _cfg.SoundEnabled = true;
+            _cfg.SoundVolume = _soundVolumeBar.Value / 100.0;
             _cfg.Save();
-            LiveUpdateAsync(); // 互斥推送: video.muted 同步, 不只落盘 (坑 21)
             _musicPathBox.Text = path;
-            _musicPlaying = true;
-            _musicPlayBtn.Text = "⏸ 暂停";
-            SetStatus("音乐已设置，播放中…");
-            await LiveMusicAsync(1);
+            UpdateSoundControls();
+            SetStatus("背景音乐已设置");
+            await LiveSoundAsync(true);
         }
         catch (Exception ex) { SetStatus("[X] " + ex.Message); }
     }
 
-    private async void ToggleMusic()
+    private async void SelectSoundSource(string source)
     {
-        if (string.IsNullOrEmpty(_cfg.MusicPath)) { SetStatus("[X] 请先选择音乐文件"); return; }
-        _musicPlaying = !_musicPlaying;
-        _musicPlayBtn.Text = _musicPlaying ? "⏸ 暂停" : "▶ 播放";
-        if (_musicPlaying)
-        {
-            ReloadCfg();
-            _cfg.VideoSound = false; // 互斥: 播放音乐则关视频声音
-            _loadingSliders = true;
-            _videoSoundChk.Checked = false;
-            _loadingSliders = false;
-            _cfg.Save();
-            LiveUpdateAsync(); // 互斥必须推送: 只落盘的话页面 video.muted 不变, 视频音轨继续响 (坑 21)
-        }
-        await LiveMusicAsync(_musicPlaying ? 1 : 0);
+        ReloadCfg();
+        if (source == "video" && _cfg.Type != "video") { SetStatus("[X] 当前不是视频壁纸"); UpdateSoundControls(); return; }
+        if (source == "music" && !File.Exists(MusicCachePath())) { SetStatus("[X] 请先选择音乐文件"); UpdateSoundControls(); return; }
+        _cfg.SoundSource = source;
+        _cfg.SoundEnabled = source != "none";
+        _cfg.Save();
+        UpdateSoundControls();
+        await LiveSoundAsync();
     }
 
-    private void ClearMusic()
+    private async void ToggleSound()
+    {
+        ReloadCfg();
+        if (_cfg.SoundSource == "none") { SetStatus("[X] 请先选择声音来源"); return; }
+        _cfg.SoundEnabled = !_cfg.SoundEnabled;
+        _cfg.Save();
+        UpdateSoundControls();
+        await LiveSoundAsync();
+    }
+
+    private async void ClearMusic()
     {
         ReloadCfg();
         _cfg.MusicPath = "";
+        if (_cfg.SoundSource == "music") { _cfg.SoundSource = "none"; _cfg.SoundEnabled = false; }
         _cfg.Save();
         _musicPathBox.Text = "";
-        _musicPlaying = false;
-        _musicPlayBtn.Text = "▶ 播放";
-        LiveMusicAsync(0, true);
+        UpdateSoundControls();
+        await LiveSoundAsync();
         SetStatus("音乐已清除");
     }
 
-    /// <summary>liveOnly=false 时用配置音量; clear=true 传 src=null 清掉页面音频元素</summary>
-    private async Task LiveMusicAsync(int playing, bool clear = false)
+    private async Task LiveSoundAsync(bool reloadMusic = false)
     {
         try
         {
-            if (!Injector.EndpointUp()) { SetStatus("ZCode 未连接"); return; }
-            string src = clear ? null : (File.Exists(MusicCachePath()) ? Util.FileUrl(MusicCachePath()) : null);
+            if (!Injector.EndpointUp()) { _soundStateLabel.Text = "当前：ZCode 未连接"; return; }
+            string src = File.Exists(MusicCachePath()) ? Util.FileUrl(MusicCachePath()) : null;
+            string observed = null;
             foreach (var t in Injector.GetTargets())
             {
-                try { await Injector.SetMusicAsync(t.WsUrl, src, playing, _cfg.MusicVolume, _cfg.MusicAutoplay); } catch { }
+                try
+                {
+                    string state = await Injector.SetSoundAsync(t.WsUrl, src, _cfg.SoundSource, _cfg.SoundEnabled, _cfg.SoundVolume, _cfg.FollowWindow, reloadMusic);
+                    if (state != "NO" && observed == null) observed = state;
+                }
+                catch { }
             }
+            if (observed == null) _soundStateLabel.Text = "当前：请重新应用壁纸以启用新版声音控制";
+            else UpdateSoundStateLabel(observed);
         }
-        catch (Exception ex) { SetStatus("音乐控制失败: " + ex.Message); }
+        catch (Exception ex) { _soundStateLabel.Text = "当前：声音控制失败 · " + ex.Message; }
+    }
+
+    private async void RefreshSoundStateAsync()
+    {
+        try
+        {
+            if (!Injector.EndpointUp()) { _soundStateLabel.Text = "当前：ZCode 未连接"; return; }
+            foreach (var t in Injector.GetTargets())
+            {
+                try
+                {
+                    string state = await Injector.GetSoundStateAsync(t.WsUrl);
+                    if (state != "NO") { UpdateSoundStateLabel(state); return; }
+                }
+                catch { }
+            }
+            _soundStateLabel.Text = "当前：请重新应用壁纸以启用新版声音控制";
+        }
+        catch (Exception ex) { _soundStateLabel.Text = "当前：状态读取失败 · " + ex.Message; }
+    }
+
+    private void UpdateSoundControls()
+    {
+        bool wasLoading = _loadingSliders;
+        _loadingSliders = true;
+        bool hasVideo = _cfg.Type == "video";
+        bool hasMusic = !string.IsNullOrEmpty(_cfg.MusicPath) && File.Exists(MusicCachePath());
+        _soundVideoRadio.Enabled = hasVideo;
+        _soundMusicRadio.Enabled = hasMusic;
+        _musicClearBtn.Enabled = !string.IsNullOrEmpty(_cfg.MusicPath);
+        _soundNoneRadio.Checked = _cfg.SoundSource == "none";
+        _soundVideoRadio.Checked = _cfg.SoundSource == "video" && hasVideo;
+        _soundMusicRadio.Checked = _cfg.SoundSource == "music" && hasMusic;
+        _soundToggleBtn.Enabled = _cfg.SoundSource == "video" ? hasVideo : (_cfg.SoundSource == "music" && hasMusic);
+        if (_cfg.SoundSource == "video") _soundToggleBtn.Text = _cfg.SoundEnabled ? "🔇 关闭原声" : "🔊 开启原声";
+        else if (_cfg.SoundSource == "music") _soundToggleBtn.Text = _cfg.SoundEnabled ? "⏸ 暂停音乐" : "▶ 播放音乐";
+        else _soundToggleBtn.Text = "请选择声音来源";
+        _loadingSliders = wasLoading;
+    }
+
+    private void UpdateSoundStateLabel(string json)
+    {
+        var d = MiniJson.Parse(json) as Dictionary<string, object>;
+        if (d == null) { _soundStateLabel.Text = "当前：声音状态未知"; return; }
+        string source = MiniJson.Str(d.ContainsKey("source") ? d["source"] : null) ?? "none";
+        string reason = MiniJson.Str(d.ContainsKey("reason") ? d["reason"] : null) ?? "none";
+        string name = source == "video" ? "视频原声" : (source == "music" ? "背景音乐" : "无声");
+        if (reason == "playing") _soundStateLabel.Text = "当前：" + name + "播放中";
+        else if (reason == "notVisible") _soundStateLabel.Text = "当前：ZCode 当前不可见，恢复可见后自动播放 " + name;
+        else if (reason == "disabled") _soundStateLabel.Text = "当前：" + name + "已由用户暂停";
+        else if (reason == "unavailable") _soundStateLabel.Text = "当前：" + name + "不可用，请重新选择来源";
+        else if (reason == "blocked") _soundStateLabel.Text = "当前：" + name + "播放被浏览器阻止";
+        else _soundStateLabel.Text = "当前：无声";
     }
 
     private TrackBar MakeSlider(Control host, ref int y, string name, int min, int max, ref Label valueLabel)
@@ -1635,13 +1960,11 @@ internal sealed class MainForm : Form
         _panelOpacityV.Text = _panelOpacity.Value.ToString();
         _panelBlurV.Text = _panelBlur.Value.ToString();
         _themeCombo.SelectedIndex = _cfg.Theme == "nocturne" ? 1 : (_cfg.Theme == "glassy" ? 2 : 0);
-        _musicVolumeBar.Value = Clamp((int)Math.Round(_cfg.MusicVolume * 100), 0, 100);
-        _musicVolumeV.Text = _musicVolumeBar.Value.ToString();
-        _musicFollowChk.Checked = _cfg.MusicAutoplay;
-        _videoSoundChk.Checked = _cfg.VideoSound;
+        _soundVolumeBar.Value = Clamp((int)Math.Round(_cfg.SoundVolume * 100), 0, 100);
+        _soundVolumeV.Text = _soundVolumeBar.Value.ToString();
+        _followWindowChk.Checked = _cfg.FollowWindow;
         _musicPathBox.Text = _cfg.MusicPath;
-        _musicPlaying = false;
-        _musicPlayBtn.Text = "▶ 播放";
+        UpdateSoundControls();
         _rotatePathBox.Text = _cfg.RotateDir;
         int[] rotMins = { 1, 5, 15, 30, 60 };
         int rotIdx = 2;
@@ -1691,7 +2014,13 @@ internal sealed class MainForm : Form
         {
             string err = await Cli.Apply(_pathBox.Text, null);
             SetStatus(err == null ? "应用成功 ✓" : "[X] " + err);
-            if (err == null) RefreshStatusAsync();
+            if (err == null)
+            {
+                ReloadCfg();
+                SetSlidersFromConfig();
+                RefreshStatusAsync();
+                RefreshSoundStateAsync();
+            }
         }
         catch (Exception ex) { SetStatus("[X] " + ex.Message); }
     }
@@ -1986,9 +2315,10 @@ internal static class Cli
                 File.Copy(mp, cached, true);
                 var cfg2 = Config.Load() ?? new Config();
                 cfg2.MusicPath = mp;
-                cfg2.VideoSound = false; // 互斥: 用音乐则关视频声音
+                cfg2.SoundSource = "music";
+                cfg2.SoundEnabled = true;
                 double v;
-                if (opts2.TryGetValue("volume", out v)) cfg2.MusicVolume = v / 100.0;
+                if (opts2.TryGetValue("volume", out v)) cfg2.SoundVolume = v / 100.0;
                 cfg2.Save();
                 // 全量重注入: 刷新注入层(含音频 onVis 跟随)并随配置创建 audio 播放
                 string url2; bool video2;
@@ -1999,17 +2329,26 @@ internal static class Cli
                         try { await Injector.InjectAsync(cfg2, t.WsUrl, url2, video2).ConfigureAwait(false); } catch { }
                     }
                 }
-                Out("[OK] 音乐已设置并播放 (" + (int)(cfg2.MusicVolume * 100) + "% 音量): " + mp);
+                Out("[OK] 背景音乐已选择并启用 (" + (int)(cfg2.SoundVolume * 100) + "% 音量): " + mp);
                 return;
             }
             if (verb == "music-off")
             {
                 var cfgX = Config.Load();
-                if (cfgX != null) { cfgX.MusicPath = ""; cfgX.Save(); }
-                bool follow = cfgX != null ? cfgX.MusicAutoplay : true;
+                if (cfgX != null)
+                {
+                    cfgX.MusicPath = "";
+                    if (cfgX.SoundSource == "music") { cfgX.SoundSource = "none"; cfgX.SoundEnabled = false; }
+                    cfgX.Save();
+                }
+                else cfgX = new Config();
                 foreach (var t in Injector.GetTargets())
                 {
-                    try { await Injector.SetMusicAsync(t.WsUrl, null, 0, 0, follow).ConfigureAwait(false); } catch { }
+                    try
+                    {
+                        await Injector.SetSoundAsync(t.WsUrl, null, cfgX.SoundSource, cfgX.SoundEnabled, cfgX.SoundVolume, cfgX.FollowWindow).ConfigureAwait(false);
+                    }
+                    catch { }
                 }
                 Out("[OK] 音乐已清除");
                 return;
@@ -2163,14 +2502,14 @@ internal static class Cli
             if (!string.IsNullOrEmpty(videoSoundArg))
             {
                 string s = videoSoundArg.Trim().ToLowerInvariant();
-                if (s == "on" || s == "true" || s == "1") cfg.VideoSound = true;
-                else if (s == "off" || s == "false" || s == "0") cfg.VideoSound = false;
+                if (s == "on" || s == "true" || s == "1") { cfg.SoundSource = "video"; cfg.SoundEnabled = true; }
+                else if ((s == "off" || s == "false" || s == "0") && cfg.SoundSource == "video") { cfg.SoundSource = "none"; cfg.SoundEnabled = false; }
             }
             if (!string.IsNullOrEmpty(musicFollowArg))
             {
                 string s = musicFollowArg.Trim().ToLowerInvariant();
-                if (s == "on" || s == "true" || s == "1") cfg.MusicAutoplay = true;
-                else if (s == "off" || s == "false" || s == "0") cfg.MusicAutoplay = false;
+                if (s == "on" || s == "true" || s == "1") cfg.FollowWindow = true;
+                else if (s == "off" || s == "false" || s == "0") cfg.FollowWindow = false;
             }
             if (accentArg != null)
             {
@@ -2183,6 +2522,7 @@ internal static class Cli
                 cfg.GlassColor = (g == "default" || g == "off") ? "" : (Util.NormalizeRgb(glassArg) ?? cfg.GlassColor);
             }
         }
+        cfg.NormalizeSound();
 
         // URL 模式降级链: 图片 data URL→file://→本地服务；视频 file://→本地服务
         string url;
@@ -2243,7 +2583,7 @@ internal static class Cli
         Config cfg = Config.Load();
         Out("配置: " + (cfg == null ? "无" : "on=" + cfg.On + " type=" + cfg.Type + " src=" + cfg.SourcePath));
         if (cfg != null)
-            Out("跟随窗口: " + (cfg.MusicAutoplay ? "开（最小化暂停播放）" : "关（独立播放）"));
+            Out("声音: source=" + cfg.SoundSource + " enabled=" + cfg.SoundEnabled + " volume=" + (int)(cfg.SoundVolume * 100) + "% · 跟随窗口=" + (cfg.FollowWindow ? "开" : "关"));
         if (cfg != null && !string.IsNullOrEmpty(cfg.RotateDir))
             Out("轮播: " + cfg.RotateDir + " / 每 " + cfg.RotateMinutes + " 分钟 / " + cfg.RotateOrder);
         foreach (var t in targets)
@@ -2253,12 +2593,13 @@ internal static class Cli
             {
                 using (var cdp = await Cdp.ConnectAsync(t.WsUrl).ConfigureAwait(false))
                 {
-                    marker = await cdp.EvaluateAsync("String(!!(window.__ZCWP && window.__ZCWP.on))").ConfigureAwait(false);
+                    marker = await cdp.EvaluateAsync("(() => { const W=window.__ZCWP; if (!W || !W.on) return 'false'; return W.getSoundState ? 'true|' + JSON.stringify(W.getSoundState()) : 'true|旧版声音协议'; })()").ConfigureAwait(false);
                 }
             }
             catch (Exception ex) { marker = "err:" + ex.Message; }
-            Out("  [" + (marker == "true" ? "已挂壁纸" : marker == "false" ? "无壁纸  " : marker) + "] " + (t.Title ?? "") + "  " + t.Url);
+            string mounted = marker != null && marker.StartsWith("true") ? "已挂壁纸" : marker == "false" ? "无壁纸  " : marker;
+            string sound = marker != null && marker.StartsWith("true|") ? " · " + marker.Substring(5) : "";
+            Out("  [" + mounted + "] " + (t.Title ?? "") + "  " + t.Url + sound);
         }
     }
 }
-

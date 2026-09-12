@@ -5,7 +5,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows_10%2F11-0078d4?logo=windows" alt="Platform">
-  <img src="https://img.shields.io/badge/version-v1.5.0-e8a33d" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.6.0-e8a33d" alt="Version">
   <img src="https://img.shields.io/badge/language-C%23_5-68217a?logo=.net" alt="Language">
   <img src="https://img.shields.io/badge/dependencies-none-27ae60" alt="Dependencies">
   <img src="https://img.shields.io/badge/license-MIT-4f8cc9" alt="License">
@@ -19,10 +19,10 @@
 
 ## ✨ Features
 
-- **🖼 Live wallpapers** — PNG / JPG / WebP, animated GIF, and full-screen video (MP4 / WebM, muted & looping; the video auto-pauses when ZCode loses focus to save CPU).
+- **🖼 Live wallpapers** — PNG / JPG / WebP, animated GIF, and full-screen video (MP4 / WebM, looping continuously; soundtrack state is controlled separately).
 - **🔄 Wallpaper rotation** — point it at a folder and it cycles your collection with a smooth cross-fade (images only; music keeps playing through the switch — the fade happens inside the layer, no re-injection). Sequential or random, interval from 1 to 60 minutes.
-- **🎵 Music layer** — play any music file (MP3/WAV/OGG/M4A/FLAC) as an independent layer, or turn on the video wallpaper's own soundtrack. Pause/play and volume right from the panel. Optionally follow the ZCode window — the moment ZCode loses focus (you switch to another app) or is minimized, playback pauses; back in front means resume (manually paused music never gets resurrected). Uncheck it and playback keeps going regardless.
-- **🗂 Three-panel GUI** — the control panel is split into tabs: **Files** (wallpaper path, rotation folder, music file), **Playback** (play/pause, volume, follow-window toggle, video soundtrack, rotation cadence) and **Style** (theme, 8 sliders, color pickers).
+- **🎵 One explicit sound source** — choose silence, the video wallpaper's soundtrack, or an independent music file (MP3/WAV/OGG/M4A/FLAC). The panel always names what its button controls, keeps one shared volume, and can pause sound only when less than 10% of ZCode remains visible; split-screen use keeps playing even when another app has focus.
+- **🗂 Three-panel GUI** — the control panel is split into tabs: **Files** (wallpaper path, rotation folder, music file), **Playback** (sound source, source-specific play/pause, volume, follow-window toggle, rotation cadence) and **Style** (theme, 8 sliders, color pickers).
 - **🎛 8 real-time sliders** — opacity, brightness, saturation, contrast, overlay, blur, panel-glass opacity, panel-glass blur. Dragging a slider changes ZCode instantly — what you tweak is what you see, zero "Apply" round-trips.
 - **🥃 Layered glass UI** — the wallpaper is the star, and the workspace sidebar + composer float above it as translucent frosted-glass panels with subtle separators. No flat "everything transparent" look. Full-screen route overlays (like the upgrade page) and modal dialogs get the same glass treatment, so nothing melts into the wallpaper.
 - **🎨 Theme presets & color pickers** — one-click moods built on the Codex skin community's playbook: **Nocturne** (`ink-black + smoked glass + amber glow`) and **Quiet Glass** (low-contrast translucent panels, softer radii). Two color pickers (accent + glass tint) override the palette live; a `custom.css` escape hatch gives power users the last word on any style.
@@ -57,7 +57,7 @@ ZCodeWallpaper.exe apply <path> [--opacity 55] [--brightness 100] [--saturation 
                                    [--contrast 100] [--overlay 30] [--blur 0]
                                    [--panel-opacity 55] [--panel-blur 10] [--theme nocturne|glassy|default]
                                    [--video-sound on|off] [--music-follow on|off] [--accent "R,G,B|#RRGGBB|default"] [--glass "R,G,B|#RRGGBB|default"]
-ZCodeWallpaper.exe music <path> [--volume 60]   # set & play a music file (independent layer)
+ZCodeWallpaper.exe music <path> [--volume 60]   # select & enable a music file (independent layer)
 ZCodeWallpaper.exe music-off                    # stop and clear music
 ZCodeWallpaper.exe rotate <folder> [--minutes 15] [--order seq|random]
                                    # cycle every image in a folder, cross-faded
@@ -80,6 +80,7 @@ No application scanning, no installation detection. The discovery is just **one 
 3. For each ZCode window it injects via `Runtime.evaluate`: background CSS variables (`--color-background-win-alt`, …) are set transparent through `document.adoptedStyleSheets` (immune to CSP), and two fixed full-viewport layers — wallpaper + black overlay — are placed behind the UI (`z-index:-1`, `pointer-events:none`).
 4. Layers of taste on top: the sidebar and composer become smoked-glass panels (`backdrop-filter` blur) driven by live `--zcwp-panel-*` properties; themes flip a `data-zcwp-theme` attribute that swaps accent/glass/radius variables.
 5. If a window loses its `window.__ZCWP.on` marker (restart, new window, reload), the daemon re-injects within seconds and re-verifies every 15 seconds.
+6. A lightweight Windows visibility check runs every 500 ms. It clips ZCode's client area to the desktop and subtracts higher windows; CDP is contacted only when the resulting 10% visibility gate changes.
 
 The port is loopback-only, so nothing outside your machine can reach it.
 
