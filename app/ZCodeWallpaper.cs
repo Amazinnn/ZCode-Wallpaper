@@ -25,6 +25,8 @@ internal static class Program
     internal static string DataDir = Path.Combine(ExeDir, "data");
     internal static Mutex InstanceMutex;
     internal static EventWaitHandle ShowGuiEvent;
+    /// <summary>守护向托盘发气泡通知的钩子, MainForm 挂接后生效</summary>
+    internal static Action<string, string> NotifyTray;
 
     [DllImport("kernel32.dll")] private static extern bool AttachConsole(int pid);
     private const int ATTACH_PARENT_PROCESS = -1;
@@ -1086,7 +1088,7 @@ async (cfg) => {
     {
         try
         {
-            using (var wc = new WebClient()) { wc.Proxy = null; wc.DownloadString(Host + "/json/version"); }
+            using (var wc = new TimedWebClient { TimeoutMs = 2500 }) { wc.Proxy = null; wc.DownloadString(Host + "/json/version"); }
             return true;
         }
         catch { return false; }
@@ -1223,8 +1225,31 @@ internal static class Watch
                 lock (Gate) { Tracked.Clear(); }
                 if (tick % 40 == 1) Util.Log("端点不可达，继续等待: " + ex.Message);
             }
+            SelfHealTick(tick);
             await Task.Delay(3000, cancel).ConfigureAwait(false);
         }
+    }
+
+    private static DateTime _noCdpSince = DateTime.MinValue;
+
+    /// <summary>自愈: ZCode 在运行但 CDP 持续 60 秒不可达, 且有快捷方式缺调试端口 →
+    /// 判定为 ZCode 更新抹掉了参数, 自动补齐并托盘提醒重启。端点恢复或 ZCode 退出即复位。</summary>
+    private static void SelfHealTick(int tick)
+    {
+        bool zcodeRunning = false;
+        try { zcodeRunning = Process.GetProcessesByName("ZCode").Length > 0; } catch { }
+        if (!zcodeRunning || Injector.EndpointUp()) { _noCdpSince = DateTime.MinValue; return; }
+        if (_noCdpSince == DateTime.MinValue) { _noCdpSince = DateTime.Now; return; }
+        if ((DateTime.Now - _noCdpSince).TotalSeconds < 60 || tick % 20 != 0) return;
+        if (!Setup.HasFlaglessLink()) return;
+        try
+        {
+            string r = Setup.AddFlags();
+            Util.Log("自愈: ZCode 运行但无调试端口, " + r + "。请重启 ZCode。");
+            if (Program.NotifyTray != null)
+                Program.NotifyTray("ZCode 壁纸", "检测到 ZCode 快捷方式丢失调试参数, 已自动修复。请重启 ZCode 恢复壁纸。");
+        }
+        catch (Exception ex) { Util.Log("自愈失败: " + ex.Message); }
     }
 
     /// <summary>轮播 tick: 仅图片壁纸时按间隔换目录里的下一张/随机一张。换图走图层内替换, 音乐与注入层不受影响。</summary>
@@ -1461,7 +1486,7 @@ internal sealed class MainForm : Form
 
     private void BuildTray()
     {
-        _tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "ZCode 壁纸 v1.6.0", Visible = true };
+        _tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "ZCode 壁纸 v1.6.1", Visible = true };
         var menu = new ContextMenu();
         menu.MenuItems.Add("打开面板", delegate { ShowPanel(); });
         menu.MenuItems.Add("截图检查", delegate { ShotAsync(); });
@@ -1471,6 +1496,10 @@ internal sealed class MainForm : Form
         menu.MenuItems.Add("退出", delegate { ExitApp(); });
         _tray.ContextMenu = menu;
         _tray.DoubleClick += delegate { ShowPanel(); };
+        Program.NotifyTray = delegate (string title, string text)
+        {
+            try { _tray.BalloonTipTitle = title; _tray.BalloonTipText = text; _tray.ShowBalloonTip(8000); } catch { }
+        };
     }
 
     private void ExitApp()
@@ -1494,7 +1523,7 @@ internal sealed class MainForm : Form
 
     private void BuildUi()
     {
-        Text = "ZCode 壁纸 v1.6.0";
+        Text = "ZCode 壁纸 v1.6.1";
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
@@ -2158,6 +2187,23 @@ internal static class Setup
             }
         }
         return found;
+    }
+
+    /// <summary>是否存在缺少调试端口参数的 ZCode 快捷方式 (ZCode 更新常会重写快捷方式抹掉参数)</summary>
+    public static bool HasFlaglessLink()
+    {
+        dynamic shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
+        foreach (var lnk in FindZcodeLinks(null))
+        {
+            try
+            {
+                dynamic sc = shell.CreateShortcut(lnk);
+                string args = (string)sc.Arguments;
+                if (args == null || !args.Contains("--remote-debugging-port=")) return true;
+            }
+            catch { }
+        }
+        return false;
     }
 
     /// <summary>给所有 ZCode 快捷方式备份并追加调试端口参数</summary>

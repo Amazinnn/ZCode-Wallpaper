@@ -5,7 +5,7 @@
 **Give ZCode a living desktop: images, GIFs, video, glass effects, and sound — without modifying ZCode itself.**
 
 [![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows)](https://github.com/Amazinnn/ZCode-Wallpaper/releases/latest)
-![Version](https://img.shields.io/badge/version-v1.6.0-E5484D)
+![Version](https://img.shields.io/badge/version-v1.6.1-E5484D)
 ![C# 5](https://img.shields.io/badge/C%23-5-68217A?logo=csharp)
 ![Dependencies](https://img.shields.io/badge/dependencies-none-2EA043)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -24,6 +24,12 @@ ZCode Wallpaper is a small, dependency-free Windows companion for the ZCode desk
 - One explicit sound source: silence, video soundtrack, or background music
 - A silent daemon that restores the wallpaper after ZCode reloads or opens a new window
 - One ~175 KB C# executable; no installer, runtime download, admin access, or Node.js required
+
+## What's new in v1.6.1
+
+### Self-healing after ZCode updates
+
+A ZCode update can rewrite its shortcuts and silently strip the `--remote-debugging-port=9335` flag, which used to disable the wallpaper until setup was re-run manually. The daemon now watches for this: when ZCode is running but the CDP endpoint stays unreachable for over a minute and a ZCode shortcut has lost the flag, it re-adds the flag automatically and shows a tray balloon asking you to restart ZCode. No manual setup re-run needed.
 
 ## What's new in v1.6.0
 
