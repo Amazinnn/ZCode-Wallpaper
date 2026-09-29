@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="app/ZCodeWallpaper.ico" width="128" alt="ZCode Wallpaper icon">
+
 # ZCode Wallpaper
 
 **Give ZCode a living desktop: images, GIFs, video, glass effects, and sound — without modifying ZCode itself.**
@@ -23,7 +25,7 @@ ZCode Wallpaper is a small, dependency-free Windows companion for the ZCode desk
 - Layered glass themes with live visual controls
 - One explicit sound source: silence, video soundtrack, or background music
 - A silent daemon that restores the wallpaper after ZCode reloads or opens a new window
-- One ~175 KB C# executable; no installer, runtime download, admin access, or Node.js required
+- One small C# executable; no installer, runtime download, admin access, or Node.js required
 
 ## What's new in v1.6.1
 
@@ -135,7 +137,7 @@ The injected layers use `pointer-events:none` and remain behind the interface. N
 From `app/`, use the C# compiler included with .NET Framework:
 
 ```powershell
-csc -nologo -target:winexe -out:ZCodeWallpaper.exe ZCodeWallpaper.cs `
+csc -nologo -target:winexe -out:ZCodeWallpaper.exe -win32icon:ZCodeWallpaper.ico ZCodeWallpaper.cs `
     -r:System.dll -r:System.Core.dll -r:System.Drawing.dll `
     -r:System.Windows.Forms.dll -r:Microsoft.CSharp.dll
 ```
