@@ -1,5 +1,5 @@
 // ZCodeWallpaper.exe — v3 纯 C# 全包版 (GUI + 守护 + CDP 注入)
-// 编译: csc -nologo -target:winexe -out:ZCodeWallpaper.exe ZCodeWallpaper.cs
+// 编译: csc -nologo -target:winexe -out:ZCodeWallpaper.exe -win32icon:ZCodeWallpaper.ico ZCodeWallpaper.cs
 //       -r:System.dll -r:System.Core.dll -r:System.Drawing.dll -r:System.Windows.Forms.dll
 // 用法: 双击=打开面板(若已在运行则唤起其面板); --hidden=静默守护自启;
 //       CLI: apply <路径> | clear | status | shot <out.png>
@@ -1418,6 +1418,7 @@ internal sealed class MainForm : Form
     private readonly bool _startHidden;
     private CancellationTokenSource _cts;
     private NotifyIcon _tray;
+    private Icon _appIcon;
     private Label _status;
     private TextBox _pathBox;
     private TrackBar _opacity, _brightness, _saturation, _contrast, _overlay, _blur, _panelOpacity, _panelBlur;
@@ -1442,6 +1443,7 @@ internal sealed class MainForm : Form
     {
         _startHidden = startHidden;
         _cfg = Config.Load() ?? new Config();
+        _appIcon = LoadAppIcon();
         BuildUi();
         BuildTray();
         _throttle = new System.Windows.Forms.Timer { Interval = 120 };
@@ -1484,9 +1486,20 @@ internal sealed class MainForm : Form
         _cfg = Config.Load() ?? new Config();
     }
 
+    private static Icon LoadAppIcon()
+    {
+        try
+        {
+            Icon icon = Icon.ExtractAssociatedIcon(Program.ExePath);
+            if (icon != null) return icon;
+        }
+        catch { }
+        return SystemIcons.Application;
+    }
+
     private void BuildTray()
     {
-        _tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "ZCode 壁纸 v1.6.1", Visible = true };
+        _tray = new NotifyIcon { Icon = _appIcon, Text = "ZCode 壁纸 v1.6.1", Visible = true };
         var menu = new ContextMenu();
         menu.MenuItems.Add("打开面板", delegate { ShowPanel(); });
         menu.MenuItems.Add("截图检查", delegate { ShotAsync(); });
@@ -1523,6 +1536,7 @@ internal sealed class MainForm : Form
 
     private void BuildUi()
     {
+        Icon = _appIcon;
         Text = "ZCode 壁纸 v1.6.1";
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
@@ -2262,6 +2276,7 @@ internal static class Setup
         dynamic sc = shell.CreateShortcut(Path.Combine(desktop, DesktopLnkName));
         sc.TargetPath = Program.ExePath;
         sc.WorkingDirectory = Program.ExeDir;
+        sc.IconLocation = Program.ExePath + ",0";
         sc.Description = "ZCode 换壁纸 v3";
         sc.Save();
         return "桌面入口已创建";
@@ -2281,6 +2296,7 @@ internal static class Setup
         sc.TargetPath = Program.ExePath;
         sc.Arguments = "--hidden";
         sc.WorkingDirectory = Program.ExeDir;
+        sc.IconLocation = Program.ExePath + ",0";
         sc.Description = "ZCode 壁纸守护 v3 (静默自启)";
         sc.Save();
         return "开机自启已配置";
